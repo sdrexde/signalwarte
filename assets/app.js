@@ -589,7 +589,7 @@
     m.innerHTML = html;
     $('#modalBack').hidden = false;
     const form = $('form', m);
-    if (form) {
+    if (form && typeof onSubmit === 'function') {
       form.addEventListener('submit', async (ev) => {
         ev.preventDefault();
         const btn = $('button[type=submit], .btn.primary', form);
