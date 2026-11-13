@@ -20,6 +20,7 @@ PHP 8 + SQLite + Vanilla JS, keine Build-Tools, kein Framework.
 - **Benachrichtigungen:** E-Mail, Telegram, Webhook (JSON), ntfy-Push – je für Fehler / Warnung / wieder OK
 - **Maps (draw.io-Bedienung):** Formen, Zonen, 20 Netzwerk-Icons, Geräte/Gruppen/Sensoren per Drag & Drop mit Live-Status, Verbinder (gerade/orthogonal/kurvig) mit Wegpunkten, Linien färben sich nach Status (zweifarbig wie PRTG), Zoom/Pan, Raster & Hilfslinien, Mehrfachauswahl, Ausrichten/Verteilen, Undo/Redo, Copy/Paste, Export PNG/SVG/JSON, **öffentlicher Link für NOC-Wand**
 - **Benutzer & Rollen:** Administrator / Nur-Lesen, CSRF-Schutz, Passwort-Hashing
+- **Sicherheit:** Zwei-Faktor-Anmeldung (TOTP: Google/Microsoft Authenticator, Aegis, Bitwarden …) mit Wiederherstellungscodes, optional **2FA-Pflicht für alle**, Anmeldesperre nach 5 Fehlversuchen (15 min, pro IP und Benutzer), Abmeldung nach Inaktivität, Anmeldungen im Protokoll
 - Hell/Dunkel-Modus (folgt dem System), mobil nutzbar
 
 Ausführliche PRTG-Recherche (Aufbau, Status, Maps, Map Designer, Gegenüberstellung): **[docs/PRTG-RECHERCHE.md](docs/PRTG-RECHERCHE.md)**
@@ -40,6 +41,8 @@ Ausführliche PRTG-Recherche (Aufbau, Status, Maps, Map Designer, Gegenüberstel
 | Netzwerkscanner | Windows-Agent mit Kanälen |
 | ![SNMP](docs/screenshots/13-snmp-interfaces.png) | ![Icons](docs/screenshots/15-icons.png) |
 | SNMP-Interfaces laden | Eigene Icons |
+| ![2FA](docs/screenshots/17-2fa-einrichten.png) | ![2FA-Login](docs/screenshots/19-2fa-login.png) |
+| 2FA einrichten | Anmeldung mit 2FA |
 
 ## Aufbau
 
@@ -172,6 +175,25 @@ Anzahl bekannter Geräte. Repeater/IP-Client: Vorlage „FRITZ!Repeater“ (ohne
 > Hinweis: Der Monitor muss die Geräte im Netz erreichen (SNMP UDP 161, TR-064 TCP 49000). Für Standorte ohne direkte
 > Verbindung: VPN/Routing oder (geplant) Remote-Probe. Der Windows-Agent funktioniert überall, wo der Server den
 > Monitor per HTTPS erreicht.
+
+## Sicherheit / 2FA
+
+- **2FA einrichten:** Einstellungen › Mein Konto › „2FA einrichten“ → QR-Code mit der Authenticator-App scannen → Code eingeben →
+  10 Wiederherstellungscodes sicher aufbewahren (jeder funktioniert einmal).
+- **2FA für alle vorschreiben:** Einstellungen › System › Sicherheit. Benutzer ohne 2FA müssen sie bei der nächsten Anmeldung einrichten.
+- **Admin-Reset:** Einstellungen › Benutzer › „2FA zurücksetzen“ (z. B. neues Handy).
+- **Notfall auf dem Server** (Admin hat Handy und Codes verloren):
+
+```bash
+cd /var/www/reload-monitor   # bzw. /var/www/html/maik/monitor
+su -s /bin/sh www-data -c "php tools/user-admin.php list"
+su -s /bin/sh www-data -c "php tools/user-admin.php reset-2fa admin"
+su -s /bin/sh www-data -c "php tools/user-admin.php unlock"            # Anmeldesperren aufheben
+su -s /bin/sh www-data -c "php tools/user-admin.php set-password admin 'NeuesPasswort'"
+```
+
+Hinweis: Die Anmeldesperre zählt pro Client-IP. Hinter einem Reverse-Proxy muss `mod_remoteip` die echte IP liefern
+(macht `install/install.sh` automatisch), sonst teilen sich alle Benutzer die Proxy-IP.
 
 ## HTTP-Push
 

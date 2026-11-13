@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 const APP_NAME    = 'Reload Monitor';
-const APP_VERSION = '1.1.1';
+const APP_VERSION = '1.2.0';
 define('APP_ROOT', dirname(__DIR__));
 define('DATA_DIR', getenv('RM_DATA_DIR') ?: APP_ROOT . '/data');
 
@@ -94,9 +94,24 @@ function current_user(): ?array
     if (empty($_SESSION['uid'])) {
         return $cache = null;
     }
-    $st = db()->prepare('SELECT id, username, role FROM users WHERE id = ?');
+    // Sitzung nach Inaktivität beenden
+    $idle = max(5, (int) setting('session_idle_min', '480')) * 60;
+    if (!empty($_SESSION['last_activity']) && time() - (int) $_SESSION['last_activity'] > $idle) {
+        $_SESSION = [];
+        return $cache = null;
+    }
+    // automatische Aktualisierungen (Status-Polling) zählen nicht als Aktivität
+    if (empty($_SERVER['HTTP_X_AUTO_REFRESH'])) {
+        $_SESSION['last_activity'] = time();
+    }
+    $st = db()->prepare('SELECT id, username, role, totp_enabled FROM users WHERE id = ?');
     $st->execute([$_SESSION['uid']]);
-    return $cache = ($st->fetch() ?: null);
+    $u = $st->fetch() ?: null;
+    if ($u) {
+        $u['totp_enabled'] = (bool) $u['totp_enabled'];
+        $u['must_setup_2fa'] = !$u['totp_enabled'] && setting('require_2fa', '0') === '1';
+    }
+    return $cache = $u;
 }
 
 function is_admin(): bool
@@ -129,18 +144,86 @@ function csrf_ok(?string $t): bool
     return !empty($_SESSION['csrf']) && is_string($t) && hash_equals($_SESSION['csrf'], $t);
 }
 
-function login_attempt(string $user, string $pass): bool
+function client_ip(): string
 {
-    $st = db()->prepare('SELECT id, password_hash FROM users WHERE username = ?');
+    // REMOTE_ADDR ist hinter dem Proxy dank mod_remoteip bereits die echte Client-IP
+    return (string) ($_SERVER['REMOTE_ADDR'] ?? 'cli');
+}
+
+const LOGIN_MAX_FAILS = 5;       // Fehlversuche …
+const LOGIN_WINDOW    = 900;     // … innerhalb von 15 Minuten → Sperre
+
+/** Sekunden bis zur nächsten erlaubten Anmeldung (0 = frei). Zählt pro IP und pro Benutzername. */
+function login_blocked_for(string $user): int
+{
+    $since = time() - LOGIN_WINDOW;
+    $st = db()->prepare('SELECT COUNT(*), MAX(ts) FROM login_attempts WHERE ok = 0 AND ts > ? AND (ip = ? OR username = ?)');
+    $st->execute([$since, client_ip(), mb_strtolower($user)]);
+    [$n, $last] = $st->fetch(PDO::FETCH_NUM);
+    if ((int) $n < LOGIN_MAX_FAILS) {
+        return 0;
+    }
+    return max(0, (int) $last + LOGIN_WINDOW - time());
+}
+
+function login_log(string $user, bool $ok): void
+{
+    db()->prepare('INSERT INTO login_attempts(ts, ip, username, ok) VALUES(?, ?, ?, ?)')->execute([time(), client_ip(), mb_strtolower($user), (int) $ok]);
+    if (random_int(1, 50) === 1) {
+        db()->prepare('DELETE FROM login_attempts WHERE ts < ?')->execute([time() - 86400 * 30]);
+    }
+    if (!$ok) {
+        log_event('user', "Fehlgeschlagene Anmeldung: {$user} von " . client_ip());
+    }
+}
+
+/** Prüft Benutzer + Passwort → Benutzerzeile oder null (ohne Sitzung zu starten). */
+function check_password(string $user, string $pass): ?array
+{
+    $st = db()->prepare('SELECT * FROM users WHERE username = ?');
     $st->execute([$user]);
     $u = $st->fetch();
     if (!$u || !password_verify($pass, $u['password_hash'])) {
         usleep(400000);
+        return null;
+    }
+    return $u;
+}
+
+function complete_login(int $uid, string $username): void
+{
+    session_regenerate_id(true);
+    unset($_SESSION['pending_uid'], $_SESSION['pending_at']);
+    $_SESSION['uid'] = $uid;
+    $_SESSION['last_activity'] = time();
+    db()->prepare('UPDATE users SET last_login = ? WHERE id = ?')->execute([time(), $uid]);
+    login_log($username, true);
+    log_event('user', "Anmeldung: {$username} von " . client_ip());
+}
+
+/** Zweiter Faktor: TOTP-Code oder Wiederherstellungscode. */
+function verify_second_factor(array $u, string $code): bool
+{
+    require_once __DIR__ . '/totp.php';
+    $code = trim($code);
+    if (preg_match('/^\d{6}$/', preg_replace('/\s/', '', $code))) {
+        $step = totp_verify((string) $u['totp_secret'], $code, $u['totp_last'] !== null ? (int) $u['totp_last'] : null);
+        if ($step !== null) {
+            db()->prepare('UPDATE users SET totp_last = ? WHERE id = ?')->execute([$step, $u['id']]);
+            return true;
+        }
         return false;
     }
-    session_regenerate_id(true);
-    $_SESSION['uid'] = (int) $u['id'];
-    return true;
+    $codes = json_decode((string) $u['recovery_codes'], true) ?: [];
+    foreach ($codes as $i => $h) {
+        if (password_verify(strtolower($code), $h)) {
+            unset($codes[$i]);
+            db()->prepare('UPDATE users SET recovery_codes = ? WHERE id = ?')->execute([json_encode(array_values($codes)), $u['id']]);
+            log_event('user', "Wiederherstellungscode benutzt: {$u['username']} (noch " . count($codes) . ')');
+            return true;
+        }
+    }
+    return false;
 }
 
 /* ---------------------------------------------------------------- Helfer */

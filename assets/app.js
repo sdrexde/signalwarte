@@ -61,11 +61,12 @@
   const S = { boot: null, tree: null, counts: {}, heartbeat: 0, now: 0, view: null, editor: null, chart: null, drawerSensor: null, filter: '', search: '' };
 
   /* ------------------------------------------------------------ Helfer */
-  async function api(action, data, params = {}) {
+  async function api(action, data, params = {}, auto = false) {
     const q = new URLSearchParams(Object.assign({ action }, params)).toString();
     const opt = data !== undefined
       ? { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': CSRF }, body: JSON.stringify(data) }
       : { headers: { Accept: 'application/json' } };
+    if (auto) opt.headers['X-Auto-Refresh'] = '1';
     const r = await fetch('api.php?' + q, opt);
     if (r.status === 401) { location.href = 'login.php'; throw new Error('Nicht angemeldet'); }
     let j;
@@ -121,8 +122,9 @@
   function allSensors() { const out = []; walk((t, o, p, d) => { if (t === 'sensor') out.push({ id: o.id, name: d.name + ' › ' + o.name }); }); return out; }
 
   /* ------------------------------------------------------- Refresh */
-  async function loadTree() {
-    const j = await api('tree');
+  async function loadTree(auto = false) {
+    if (S.boot && S.boot.user.must_setup_2fa) return;
+    const j = await api('tree', undefined, {}, auto);
     S.tree = j.tree; S.counts = j.counts; S.heartbeat = j.heartbeat; S.now = j.now;
     renderStatusbar();
     const pw = $('#pollerWarn');
@@ -148,7 +150,7 @@
     clearTimeout(refreshTimer);
     refreshTimer = setTimeout(async () => {
       try {
-        await loadTree();
+        await loadTree(true);
         if (!document.hidden && $('#modalBack').hidden) {
           if (['home', 'devices', 'alarms'].includes(S.view)) route(true);
         }
@@ -164,6 +166,10 @@
     const [path, qs] = h.split('?');
     const params = new URLSearchParams(qs || '');
     const parts = path.split('/').filter(Boolean);
+    if (S.boot && S.boot.user.must_setup_2fa && !(parts[0] === 'settings' && parts[1] === 'account')) {
+      location.hash = '#/settings/account';
+      return;
+    }
     const v = parts[0] || 'home';
     if (S.editor && !(v === 'maps' && parts[1])) { S.editor.destroy(); S.editor = null; }
     $$('.mainnav a').forEach((a) => a.classList.toggle('on', a.dataset.nav === v));
@@ -350,7 +356,7 @@
       startMode: m.id && params.get('edit') !== '1' ? 'view' : 'edit',
       objects: S.tree, status: statusIndexFromTree(),
       deviceIcon: (id) => { const r = findDevice(id); return r ? r.d.icon : null; },
-      fetchStatus: () => api('status').then((j) => j.index),
+      fetchStatus: () => api('status', undefined, {}, true).then((j) => j.index),
       renderShare: shareHtml,
       onOpenObject: (b) => {
         if (b.type === 'sensor') openSensor(b.id);
@@ -411,8 +417,9 @@
       if (!j) return;
       S.users = j.users;
       box.innerHTML = `<div class="card"><div class="cardhead"><h2>Benutzer</h2>${isAdmin() ? '<button class="btn primary" data-act="user-edit">+ Benutzer</button>' : ''}</div>
-        <table class="tbl"><thead><tr><th>Benutzer</th><th>Rolle</th><th>Angelegt</th><th></th></tr></thead><tbody>${j.users.map((u) => `<tr><td><b>${esc(u.username)}</b></td><td>${u.role === 'admin' ? 'Administrator' : 'Nur lesen'}</td><td>${dt(u.created_at)}</td>
-        <td class="right">${isAdmin() ? `<button class="btn sm" data-act="user-edit" data-id="${u.id}">Bearbeiten</button><button class="btn sm danger" data-act="user-del" data-id="${u.id}">Löschen</button>` : ''}</td></tr>`).join('')}</tbody></table></div>`;
+        <table class="tbl"><thead><tr><th>Benutzer</th><th>Rolle</th><th>2FA</th><th>Letzte Anmeldung</th><th>Angelegt</th><th></th></tr></thead><tbody>${j.users.map((u) => `<tr><td><b>${esc(u.username)}</b></td><td>${u.role === 'admin' ? 'Administrator' : 'Nur lesen'}</td>
+        <td>${+u.totp_enabled ? '<span class="badge st-up">aktiv</span>' : '<span class="badge st-unknown">aus</span>'}</td><td>${u.last_login ? dt(u.last_login) : '–'}</td><td>${dt(u.created_at)}</td>
+        <td class="right nowrap">${isAdmin() ? `${+u.totp_enabled && u.id !== S.boot.user.id ? `<button class="btn sm" data-act="user-2fa-reset" data-id="${u.id}">2FA zurücksetzen</button>` : ''}<button class="btn sm" data-act="user-edit" data-id="${u.id}">Bearbeiten</button><button class="btn sm danger" data-act="user-del" data-id="${u.id}">Löschen</button>` : ''}</td></tr>`).join('')}</tbody></table></div>`;
     } else if (sub === 'system') {
       const j = await api('settings').catch(fail);
       if (!j) return;
@@ -426,8 +433,18 @@
           <label class="f"><span>Messwerte aufbewahren (Tage)</span><input type="number" name="retention_days" min="1" max="400" value="${j.settings.retention_days}"></label>
           <label class="f"><span>Parallele Prüf-Prozesse</span><input type="number" name="poller_workers" min="1" max="32" value="${j.settings.poller_workers}"></label>
           ${isAdmin() ? '<button class="btn primary">Speichern</button>' : ''}</form></div>
+        <form class="card" id="secForm"><h2>🔐 Sicherheit</h2>
+          <label class="check"><input type="checkbox" name="require_2fa"${j.settings.require_2fa ? ' checked' : ''}> Zwei-Faktor-Anmeldung (2FA) für <b>alle</b> Benutzer vorschreiben</label>
+          <p class="muted small">Benutzer ohne 2FA müssen sie bei der nächsten Anmeldung einrichten, bevor sie etwas anderes sehen.</p>
+          <label class="f"><span>Automatisch abmelden nach Inaktivität (Minuten)</span><input type="number" name="session_idle_min" min="5" max="10080" value="${j.settings.session_idle_min}"></label>
+          <p class="muted small">Anmeldeschutz: nach 5 Fehlversuchen in 15 Minuten (pro IP oder Benutzer) wird die Anmeldung 15 Minuten gesperrt. Alle Anmeldungen stehen im Protokoll.</p>
+          ${isAdmin() ? '<button class="btn primary">Speichern</button>' : ''}</form>
         <div class="card"><h2>HTTP-Push & API</h2><p class="muted">Push-Sensoren erhalten eine eigene URL: <code>${esc(location.origin + path)}push.php?token=…&amp;value=42&amp;status=up&amp;msg=Text</code></p>
         <p class="muted small">Version ${esc(S.boot.version)}</p></div>`;
+      $('#secForm').addEventListener('submit', async (ev) => {
+        ev.preventDefault();
+        try { await api('settings_save', { require_2fa: ev.target.require_2fa.checked, session_idle_min: ev.target.session_idle_min.value }); toast('Sicherheit gespeichert'); } catch (e) { fail(e); route(); }
+      });
       $('#sysForm').addEventListener('submit', async (ev) => {
         ev.preventDefault();
         const fd = Object.fromEntries(new FormData(ev.target));
@@ -455,7 +472,15 @@
         } catch (e) { fail(e); }
       });
     } else if (sub === 'account') {
-      box.innerHTML = `<form class="card narrow" id="pwForm"><h2>Passwort ändern</h2>
+      const u = S.boot.user;
+      box.innerHTML = `${u.must_setup_2fa ? '<div class="alert">🔐 Für dieses System ist die Zwei-Faktor-Anmeldung vorgeschrieben. Bitte jetzt einrichten – danach geht es normal weiter.</div>' : ''}
+        <div class="card narrow" id="tfaCard"><h2>🔐 Zwei-Faktor-Anmeldung (2FA)</h2>
+        ${u.totp_enabled ? `<p><span class="badge st-up">aktiv</span> Beim Anmelden wird zusätzlich ein Code aus deiner Authenticator-App abgefragt.</p>
+          <div class="row wrap"><button class="btn" data-act="tfa-recovery">Neue Wiederherstellungscodes</button><button class="btn danger" data-act="tfa-off">2FA deaktivieren</button></div>`
+        : `<p class="muted">Schützt dein Konto zusätzlich mit einem 6-stelligen Code aus einer Authenticator-App (Google/Microsoft Authenticator, Aegis, Bitwarden, 1Password …).</p>
+          <button class="btn primary" data-act="tfa-setup">2FA einrichten</button>`}
+        <div id="tfaBox"></div></div>
+        <form class="card narrow" id="pwForm"><h2>Passwort ändern</h2>
         <label class="f"><span>Aktuelles Passwort</span><input type="password" name="old" required autocomplete="current-password"></label>
         <label class="f"><span>Neues Passwort (min. 8 Zeichen)</span><input type="password" name="new" minlength="8" required autocomplete="new-password"></label>
         <button class="btn primary">Ändern</button></form>`;
@@ -874,6 +899,58 @@
 
   async function reload() { await loadTree(); route(true); }
 
+  function loadScript(src) {
+    return new Promise((res, rej) => {
+      if (document.querySelector(`script[src="${src}"]`)) { res(); return; }
+      const sc = document.createElement('script');
+      sc.src = src; sc.onload = res; sc.onerror = () => rej(new Error('Skript konnte nicht geladen werden'));
+      document.head.appendChild(sc);
+    });
+  }
+
+  async function tfaSetup() {
+    const j = await api('totp_setup', {});
+    const box = $('#tfaBox');
+    box.innerHTML = `<ol class="tfasteps">
+      <li>Authenticator-App öffnen und diesen QR-Code scannen:<div id="tfaQr" class="tfaqr"></div>
+        <details><summary>QR-Code geht nicht? Schlüssel manuell eingeben</summary><code class="tfasecret">${esc(j.secret.replace(/(.{4})/g, '$1 ').trim())}</code><p class="muted small">Typ: zeitbasiert (TOTP), 6 Stellen, 30 Sekunden</p></details></li>
+      <li>Den angezeigten 6-stelligen Code eingeben:
+        <form id="tfaForm" class="row"><input name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="7" placeholder="123456" required><button class="btn primary">Aktivieren</button></form></li></ol>`;
+    try {
+      await loadScript('https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js');
+      // eslint-disable-next-line no-new
+      new window.QRCode($('#tfaQr'), { text: j.uri, width: 200, height: 200, correctLevel: window.QRCode.CorrectLevel.M });
+    } catch (e) { $('#tfaQr').innerHTML = '<p class="muted">QR-Code konnte nicht geladen werden – bitte den Schlüssel manuell eingeben.</p>'; }
+    $('#tfaForm').addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      const btn = $('#tfaForm button');
+      btn.disabled = true; btn.textContent = '⏳ Prüfe …';
+      try {
+        const r = await api('totp_enable', { code: ev.target.code.value });
+        S.boot = await api('bootstrap');
+        showRecovery(r.recovery_codes, false);
+      } catch (e2) { fail(e2); }
+      btn.disabled = false; btn.textContent = 'Aktivieren';
+    });
+    $('#tfaForm input').focus();
+  }
+
+  function showRecovery(codes, renewed) {
+    const txt = 'Reload Monitor – Wiederherstellungscodes (' + S.boot.user.username + ', ' + new Date().toLocaleString('de-DE') + ')\nJeder Code funktioniert genau einmal.\n\n' + codes.join('\n') + '\n';
+    modal(`<div><h2>${renewed ? 'Neue ' : '✅ 2FA aktiv – '}Wiederherstellungscodes</h2>
+      <p>Bewahre diese Codes sicher auf (z. B. im Passwortmanager). Jeder Code ersetzt <b>einmal</b> den App-Code, falls du dein Handy verlierst. Sie werden nur jetzt angezeigt.${renewed ? ' Die alten Codes sind ab sofort ungültig.' : ''}</p>
+      <div class="recovery">${codes.map((c) => `<code>${esc(c)}</code>`).join('')}</div>
+      <div class="mfoot"><button type="button" class="btn" id="recCopy">Kopieren</button><a class="btn" id="recDl" download="reload-monitor-wiederherstellungscodes.txt">Als Datei speichern</a><button type="button" class="btn primary" id="recDone">Gespeichert – fertig</button></div></div>`);
+    $('#recDl').href = URL.createObjectURL(new Blob([txt], { type: 'text/plain' }));
+    $('#recCopy').addEventListener('click', () => navigator.clipboard.writeText(txt).then(() => toast('Kopiert')));
+    $('#recDone').addEventListener('click', async () => {
+      closeModal();
+      if (!S.tree) { await loadTree(); }
+      location.hash = '#/';
+      route();
+    });
+  }
+
   /* ======================================================= Aktionen */
   document.addEventListener('click', async (ev) => {
     const a = ev.target.closest('[data-act]');
@@ -902,6 +979,24 @@
         case 'close-modal': closeModal(); break;
         case 'close-modal-go': closeModal(); location.hash = a.getAttribute('href'); break;
         case 'scan': scanDialog(); break;
+        case 'tfa-setup': await tfaSetup(); break;
+        case 'tfa-off': {
+          const pw = prompt('Zum Deaktivieren: aktuelles Passwort');
+          if (!pw) break;
+          const code = prompt('Und den aktuellen 2FA-Code (oder einen Wiederherstellungscode)');
+          if (!code) break;
+          await api('totp_disable', { password: pw, code }); toast('2FA deaktiviert');
+          S.boot = await api('bootstrap'); route();
+          break;
+        }
+        case 'tfa-recovery': {
+          const pw = prompt('Aktuelles Passwort zur Bestätigung');
+          if (!pw) break;
+          const r = await api('totp_recovery_new', { password: pw });
+          showRecovery(r.recovery_codes, true);
+          break;
+        }
+        case 'user-2fa-reset': if (confirm('2FA für diesen Benutzer zurücksetzen? Er kann sich danach nur mit Passwort anmelden (bzw. muss 2FA neu einrichten, falls vorgeschrieben).')) { await api('user_2fa_reset', { id }); toast('2FA zurückgesetzt'); route(); } break;
         case 'chan': S.chartChannel = a.dataset.c; if (S.drawerSensor) openSensor(S.drawerSensor, true); break;
         case 'icon-del': if (confirm('Icon löschen? Geräte damit erhalten wieder das Server-Icon.')) { await api('icon_delete', { id }); S.boot = await api('bootstrap'); RM_ICONS.registerCustom(S.boot.icons); await reload(); route(); } break;
         case 'load-ifs': {
@@ -1020,7 +1115,7 @@
     try {
       S.boot = await api('bootstrap');
       RM_ICONS.registerCustom(S.boot.icons);
-      await loadTree();
+      if (!S.boot.user.must_setup_2fa) await loadTree();
       route();
       scheduleRefresh();
     } catch (e) { $('#view').innerHTML = `<div class="page"><div class="alert">Fehler beim Laden: ${esc(e.message)}</div></div>`; }

@@ -28,7 +28,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             seed_demo($db);
         }
         $db->commit();
-        login_attempt($u, $p);
+        complete_login((int) $db->query('SELECT id FROM users ORDER BY id LIMIT 1')->fetchColumn(), $u);
         header('Location: ./');
         exit;
     }

@@ -17,7 +17,7 @@ if ($method === 'POST') {
         json_err('CSRF-Token ungültig – Seite neu laden', 403);
     }
     $in = json_decode(file_get_contents('php://input') ?: '{}', true) ?: [];
-    $readOnlyAllowed = ['sensor_ack', 'sensor_check', 'password'];
+    $readOnlyAllowed = ['sensor_ack', 'sensor_check', 'password', 'totp_setup', 'totp_enable', 'totp_disable', 'totp_recovery_new'];
     if ($user['role'] !== 'admin' && !in_array($action, $readOnlyAllowed, true)) {
         json_err('Nur für Administratoren', 403);
     }
@@ -61,6 +61,22 @@ function group_is_descendant(int $id, int $ancestor): bool
 }
 
 $db = db();
+
+// 2FA-Pflicht: bis zur Einrichtung nur Konto-Aktionen erlauben
+if (!empty($user['must_setup_2fa']) && !in_array($action, ['bootstrap', 'totp_setup', 'totp_enable', 'password'], true)) {
+    json_err('Bitte zuerst die Zwei-Faktor-Anmeldung einrichten (Mein Konto).', 403);
+}
+
+/** Aktuelles Passwort des angemeldeten Benutzers prüfen. */
+function confirm_password(array $user, string $pw): void
+{
+    $st = db()->prepare('SELECT password_hash FROM users WHERE id = ?');
+    $st->execute([$user['id']]);
+    if (!password_verify($pw, (string) $st->fetchColumn())) {
+        usleep(400000);
+        json_err('Passwort falsch');
+    }
+}
 
 try {
     switch ($action) {
@@ -161,12 +177,14 @@ try {
             json_out(['ok' => true, 'notifications' => $rows]);
 
         case 'users':
-            json_out(['ok' => true, 'users' => $db->query('SELECT id, username, role, created_at FROM users ORDER BY username')->fetchAll()]);
+            json_out(['ok' => true, 'users' => $db->query('SELECT id, username, role, created_at, totp_enabled, last_login FROM users ORDER BY username')->fetchAll()]);
 
         case 'settings':
             json_out(['ok' => true, 'settings' => [
                 'retention_days' => (int) setting('retention_days', '30'),
                 'poller_workers' => (int) setting('poller_workers', '8'),
+                'require_2fa' => setting('require_2fa', '0') === '1',
+                'session_idle_min' => (int) setting('session_idle_min', '480'),
             ]]);
 
         /* ------------------------------------------------------- Schreiben */
@@ -418,6 +436,17 @@ try {
         case 'settings_save':
             setting_set('retention_days', (string) max(1, min(400, (int) ($in['retention_days'] ?? 30))));
             setting_set('poller_workers', (string) max(1, min(32, (int) ($in['poller_workers'] ?? 8))));
+            if (isset($in['session_idle_min'])) {
+                setting_set('session_idle_min', (string) max(5, min(10080, (int) $in['session_idle_min'])));
+            }
+            if (isset($in['require_2fa'])) {
+                $req = filter_var($in['require_2fa'], FILTER_VALIDATE_BOOLEAN);
+                if ($req && !$user['totp_enabled']) {
+                    json_err('Richte zuerst für dein eigenes Konto 2FA ein, bevor du sie für alle vorschreibst.');
+                }
+                setting_set('require_2fa', $req ? '1' : '0');
+                log_event('user', '2FA-Pflicht ' . ($req ? 'aktiviert' : 'deaktiviert') . " von {$user['username']}");
+            }
             json_out(['ok' => true]);
 
         case 'snmp_interfaces':
@@ -464,6 +493,66 @@ try {
         case 'icon_delete':
             $db->prepare('DELETE FROM icons WHERE id = ?')->execute([(int) $in['id']]);
             $db->prepare("UPDATE devices SET icon = 'server' WHERE icon = ?")->execute(['c' . (int) $in['id']]);
+            json_out(['ok' => true]);
+
+        case 'totp_setup':
+            require_once __DIR__ . '/lib/totp.php';
+            if ($user['totp_enabled']) {
+                json_err('2FA ist bereits aktiv');
+            }
+            $_SESSION['totp_pending'] = totp_new_secret();
+            $issuer = APP_NAME . ' (' . ($_SERVER['HTTP_X_FORWARDED_HOST'] ?? $_SERVER['HTTP_HOST'] ?? 'local') . ')';
+            json_out(['ok' => true, 'secret' => $_SESSION['totp_pending'], 'uri' => totp_uri($_SESSION['totp_pending'], $user['username'], $issuer)]);
+
+        case 'totp_enable':
+            require_once __DIR__ . '/lib/totp.php';
+            $secret = (string) ($_SESSION['totp_pending'] ?? '');
+            if ($secret === '') {
+                json_err('Einrichtung abgelaufen – bitte neu starten');
+            }
+            $step = totp_verify($secret, (string) ($in['code'] ?? ''));
+            if ($step === null) {
+                json_err('Code stimmt nicht. Uhrzeit von Handy/Server prüfen und den aktuellen Code eingeben.');
+            }
+            [$plain, $hashes] = recovery_codes_new();
+            $db->prepare('UPDATE users SET totp_secret = ?, totp_enabled = 1, totp_last = ?, recovery_codes = ? WHERE id = ?')
+                ->execute([$secret, $step, json_encode($hashes), $user['id']]);
+            unset($_SESSION['totp_pending']);
+            log_event('user', "2FA aktiviert: {$user['username']}");
+            json_out(['ok' => true, 'recovery_codes' => $plain]);
+
+        case 'totp_disable':
+            if (setting('require_2fa', '0') === '1') {
+                json_err('2FA ist für alle Benutzer vorgeschrieben und kann nicht abgeschaltet werden.');
+            }
+            confirm_password($user, (string) ($in['password'] ?? ''));
+            $st = $db->prepare('SELECT * FROM users WHERE id = ?');
+            $st->execute([$user['id']]);
+            if (!verify_second_factor($st->fetch(), (string) ($in['code'] ?? ''))) {
+                json_err('2FA-Code ungültig');
+            }
+            $db->prepare('UPDATE users SET totp_secret = NULL, totp_enabled = 0, totp_last = NULL, recovery_codes = NULL WHERE id = ?')->execute([$user['id']]);
+            log_event('user', "2FA deaktiviert: {$user['username']}");
+            json_out(['ok' => true]);
+
+        case 'totp_recovery_new':
+            confirm_password($user, (string) ($in['password'] ?? ''));
+            if (!$user['totp_enabled']) {
+                json_err('2FA ist nicht aktiv');
+            }
+            require_once __DIR__ . '/lib/totp.php';
+            [$plain, $hashes] = recovery_codes_new();
+            $db->prepare('UPDATE users SET recovery_codes = ? WHERE id = ?')->execute([json_encode($hashes), $user['id']]);
+            log_event('user', "Neue Wiederherstellungscodes: {$user['username']}");
+            json_out(['ok' => true, 'recovery_codes' => $plain]);
+
+        case 'user_2fa_reset':
+            $id = (int) ($in['id'] ?? 0);
+            if ($id === (int) $user['id']) {
+                json_err('Eigene 2FA bitte unter „Mein Konto“ verwalten');
+            }
+            $db->prepare('UPDATE users SET totp_secret = NULL, totp_enabled = 0, totp_last = NULL, recovery_codes = NULL WHERE id = ?')->execute([$id]);
+            log_event('user', "2FA zurückgesetzt für Benutzer #{$id} von {$user['username']}");
             json_out(['ok' => true]);
 
         default:

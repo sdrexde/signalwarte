@@ -155,4 +155,22 @@ function db_migrate_more(PDO $pdo, int $ver): void
         PRAGMA user_version = 3;
         SQL);
     }
+    if ($ver < 4) {
+        $pdo->exec(<<<SQL
+        ALTER TABLE users ADD COLUMN totp_secret TEXT;
+        ALTER TABLE users ADD COLUMN totp_enabled INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE users ADD COLUMN totp_last INTEGER;
+        ALTER TABLE users ADD COLUMN recovery_codes TEXT;
+        ALTER TABLE users ADD COLUMN last_login INTEGER;
+        CREATE TABLE IF NOT EXISTS login_attempts (
+            id INTEGER PRIMARY KEY,
+            ts INTEGER NOT NULL,
+            ip TEXT NOT NULL,
+            username TEXT NOT NULL,
+            ok INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_login_attempts ON login_attempts(ip, ts);
+        PRAGMA user_version = 4;
+        SQL);
+    }
 }
