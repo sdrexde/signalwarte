@@ -72,6 +72,8 @@ Datenmodell (SQLite): `groups`, `devices`, `sensors`, `results` (Messwerte), `ev
 
 ## Installation
 
+> **Ausführliche Schritt-für-Schritt-Anleitung (eigener LXC, Umzug, Proxy, Firewall, Prüfbefehle, Fehlersuche, Kurzfassung für KI-Agenten): [docs/INSTALLATION.md](docs/INSTALLATION.md)**
+
 Voraussetzungen: PHP ≥ 8.1 mit `pdo_sqlite`, `curl`, `openssl`, optional `pcntl` (parallele Prüfungen); `ping` im System; Apache (oder nginx – dann `data/`, `lib/`, `cron/` selbst sperren).
 
 ```bash

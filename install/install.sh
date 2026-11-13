@@ -29,7 +29,7 @@ echo "==> Pakete installieren"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y -qq apache2 libapache2-mod-php php-cli php-sqlite3 php-curl php-mbstring php-intl \
-  iputils-ping cron git ca-certificates libcap2-bin >/dev/null
+  iputils-ping cron git curl ca-certificates libcap2-bin >/dev/null
 
 php -r 'exit(extension_loaded("pdo_sqlite") && extension_loaded("curl") ? 0 : 1);' || { echo "PHP-Erweiterungen fehlen (pdo_sqlite/curl)."; exit 1; }
 php -r 'exit(function_exists("pcntl_fork") ? 0 : 1);' || echo "Hinweis: pcntl fehlt im PHP-CLI – Sensoren werden dann nacheinander statt parallel geprüft."
