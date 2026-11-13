@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Konsistentes Backup der Reload-Monitor-Datenbank (im laufenden Betrieb, per SQLite "VACUUM INTO").
+# Konsistentes Backup der Signalwarte-Datenbank (im laufenden Betrieb, per SQLite "VACUUM INTO").
 #   bash tools/backup.sh [/ziel/datei.sqlite]
 # Wiederherstellen / Umzug auf neuen Server:  bash install/install.sh --import /ziel/datei.sqlite
 set -euo pipefail
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-OUT="${1:-/tmp/reload-monitor-$(date +%Y%m%d-%H%M%S).sqlite}"
+OUT="${1:-/tmp/signalwarte-$(date +%Y%m%d-%H%M%S).sqlite}"
 [ -f "$APP_DIR/data/monitor.sqlite" ] || { echo "Keine Datenbank unter $APP_DIR/data gefunden."; exit 1; }
 [ -e "$OUT" ] && { echo "$OUT existiert bereits."; exit 1; }
 TMP="$(mktemp -d)"

@@ -185,7 +185,7 @@ function scan_http_titles(array $targets): array
         curl_setopt_array($ch, [
             CURLOPT_RETURNTRANSFER => true, CURLOPT_HEADER => true, CURLOPT_FOLLOWLOCATION => true, CURLOPT_MAXREDIRS => 3,
             CURLOPT_TIMEOUT => 4, CURLOPT_CONNECTTIMEOUT => 2, CURLOPT_SSL_VERIFYPEER => false, CURLOPT_SSL_VERIFYHOST => 0,
-            CURLOPT_RANGE => '0-65535', CURLOPT_USERAGENT => 'Mozilla/5.0 (Reload Monitor Scanner)',
+            CURLOPT_RANGE => '0-65535', CURLOPT_USERAGENT => 'Mozilla/5.0 (Signalwarte Scanner)',
             CURLOPT_PROTOCOLS => CURLPROTO_HTTP | CURLPROTO_HTTPS,
         ]);
         curl_multi_add_handle($mh, $ch);

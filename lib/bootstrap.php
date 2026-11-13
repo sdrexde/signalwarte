@@ -2,8 +2,8 @@
 // Zentrale Initialisierung: Konfiguration, Datenbank, Session/Auth, Helfer.
 declare(strict_types=1);
 
-const APP_NAME    = 'Reload Monitor';
-const APP_VERSION = '1.3.1';
+const APP_NAME    = 'Signalwarte';
+const APP_VERSION = '1.4.0';
 define('APP_ROOT', dirname(__DIR__));
 define('DATA_DIR', getenv('RM_DATA_DIR') ?: APP_ROOT . '/data');
 
@@ -66,7 +66,7 @@ function session_boot(): void
     }
     $https = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
         || (($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https');
-    session_name('RELOADMONSESS');
+    session_name('SIGNALWARTESESS');
     session_set_cookie_params([
         'lifetime' => 0,
         'path'     => base_path(),

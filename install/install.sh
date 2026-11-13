@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Reload Monitor – Installation auf einem frischen Debian/Ubuntu-LXC (oder VM)
+# Signalwarte – Installation auf einem frischen Debian/Ubuntu-LXC (oder VM)
 #
-#   git clone git@github.com:sdrexde/prtg_reload.git /var/www/reload-monitor
-#   bash /var/www/reload-monitor/install/install.sh [--import /pfad/backup.sqlite] [--name monitor.example.de]
+#   git clone git@github.com:sdrexde/signalwarte.git /var/www/signalwarte
+#   bash /var/www/signalwarte/install/install.sh [--import /pfad/backup.sqlite] [--name monitor.example.de]
 #
 # Richtet ein: Apache + PHP (pdo_sqlite, curl, pcntl), vHost auf / , Cron-Poller (jede Minute als www-data),
 # Rechte, ping für www-data, optional Datenübernahme aus einem Backup (tools/backup.sh).
@@ -36,7 +36,7 @@ php -r 'exit(function_exists("pcntl_fork") ? 0 : 1);' || echo "Hinweis: pcntl fe
 
 echo "==> Apache einrichten ($APP_DIR)"
 a2enmod -q rewrite headers remoteip >/dev/null
-cat > /etc/apache2/sites-available/reload-monitor.conf <<EOF
+cat > /etc/apache2/sites-available/signalwarte.conf <<EOF
 <VirtualHost *:80>
     ServerName ${SERVER_NAME}
     DocumentRoot ${APP_DIR}
@@ -54,11 +54,11 @@ cat > /etc/apache2/sites-available/reload-monitor.conf <<EOF
         Require all denied
     </DirectoryMatch>
 
-    ErrorLog \${APACHE_LOG_DIR}/reload-monitor-error.log
-    CustomLog \${APACHE_LOG_DIR}/reload-monitor-access.log combined
+    ErrorLog \${APACHE_LOG_DIR}/signalwarte-error.log
+    CustomLog \${APACHE_LOG_DIR}/signalwarte-access.log combined
 </VirtualHost>
 EOF
-a2ensite -q reload-monitor >/dev/null
+a2ensite -q signalwarte >/dev/null
 a2dissite -q 000-default >/dev/null 2>&1 || true
 
 echo "==> Daten & Rechte"
@@ -87,8 +87,8 @@ echo "==> Datenbank initialisieren / migrieren"
 su -s /bin/sh www-data -c "php -r 'require \"$APP_DIR/lib/engine.php\"; echo \"    Schema v\", db()->query(\"PRAGMA user_version\")->fetchColumn(), PHP_EOL;'"
 
 echo "==> Poller (Cron) einrichten"
-echo "* * * * * www-data php ${APP_DIR}/cron/poller.php >/dev/null 2>&1" > /etc/cron.d/reload-monitor
-chmod 644 /etc/cron.d/reload-monitor
+echo "* * * * * www-data php ${APP_DIR}/cron/poller.php >/dev/null 2>&1" > /etc/cron.d/signalwarte
+chmod 644 /etc/cron.d/signalwarte
 systemctl enable --now cron >/dev/null 2>&1 || service cron start >/dev/null 2>&1 || true
 
 systemctl restart apache2 2>/dev/null || service apache2 restart
@@ -96,7 +96,7 @@ su -s /bin/sh www-data -c "php $APP_DIR/cron/poller.php --once" >/dev/null 2>&1 
 
 IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 echo
-echo "Fertig. Reload Monitor läuft unter:  http://${IP:-<IP>}/"
+echo "Fertig. Signalwarte läuft unter:  http://${IP:-<IP>}/"
 if [ -z "$IMPORT" ]; then
   echo "Beim ersten Aufruf das Admin-Konto anlegen (Ersteinrichtung)."
 else

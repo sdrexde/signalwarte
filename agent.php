@@ -1,6 +1,6 @@
 <?php
 // Liefert den Windows-Agenten mit eingesetzter Push-URL + Token aus (wie bei Spurwerk).
-//   agent.php?token=XYZ            -> ReloadAgent.ps1 (Download)
+//   agent.php?token=XYZ            -> SignalwarteAgent.ps1 (Download)
 // Ohne Login nutzbar, weil das Token selbst der Schlüssel ist (nur Admins sehen es in der Oberfläche).
 declare(strict_types=1);
 
@@ -29,10 +29,10 @@ $cfg = json_encode([
 // nur ASCII in die PS1 (Windows PowerShell 5.1 ohne BOM)
 $cfg = preg_replace_callback('/[^\x00-\x7F]/u', fn($m) => sprintf('\\u%04x', mb_ord($m[0])), $cfg);
 
-$tpl = file_get_contents(__DIR__ . '/agent/ReloadAgent.ps1');
-$out = str_replace('__RELOAD_CONFIG__', $cfg, $tpl);
+$tpl = file_get_contents(__DIR__ . '/agent/SignalwarteAgent.ps1');
+$out = str_replace('__SIGNALWARTE_CONFIG__', $cfg, $tpl);
 $out = str_replace("\n", "\r\n", str_replace("\r\n", "\n", $out));
 header('Content-Type: application/octet-stream');
-header('Content-Disposition: attachment; filename="ReloadAgent.ps1"');
+header('Content-Disposition: attachment; filename="SignalwarteAgent.ps1"');
 header('Cache-Control: no-store');
 echo $out;

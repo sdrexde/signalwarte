@@ -1,4 +1,4 @@
-// Reload Monitor – Single-Page-Oberfläche (Vanilla JS).
+// Signalwarte – Single-Page-Oberfläche (Vanilla JS).
 /* global Chart, MapEditor, RM_ICONS, RM_STATUS_COLOR, RM_STATUS_TEXT */
 (function () {
   'use strict';
@@ -157,7 +157,7 @@
     const bad = (c.down || 0) + (c.warning || 0);
     const b = $('#alarmBadge');
     b.hidden = !bad; b.textContent = bad;
-    document.title = (c.down ? `(${c.down}) ` : '') + 'Reload Monitor';
+    document.title = (c.down ? `(${c.down}) ` : '') + 'Signalwarte';
   }
 
   let refreshTimer;
@@ -443,7 +443,7 @@
           <p>Status: ${S.heartbeat && S.now - S.heartbeat < 180 ? '<span class="badge st-up">läuft</span>' : '<span class="badge st-down">läuft nicht</span>'} · letzter Lauf ${ago(S.heartbeat)}</p>
           <p class="muted">Der Poller prüft alle fälligen Sensoren parallel. Er wird per Cron jede Minute gestartet und läuft dann knapp 60 Sekunden:</p>
           <pre class="code">* * * * * www-data php ${esc('/pfad/zur/app')}/cron/poller.php &gt;/dev/null 2&gt;&amp;1</pre>
-          <p class="muted small">Datei z. B. <code>/etc/cron.d/reload-monitor</code>. Manueller Test: <code>php cron/poller.php --once --verbose</code></p></div>
+          <p class="muted small">Datei z. B. <code>/etc/cron.d/signalwarte</code>. Manueller Test: <code>php cron/poller.php --once --verbose</code></p></div>
         <form class="card" id="sysForm"><h2>Datenhaltung & Leistung</h2>
           <label class="f"><span>Messwerte aufbewahren (Tage)</span><input type="number" name="retention_days" min="1" max="400" value="${j.settings.retention_days}"></label>
           <label class="f"><span>Parallele Prüf-Prozesse</span><input type="number" name="poller_workers" min="1" max="32" value="${j.settings.poller_workers}"></label>
@@ -595,10 +595,10 @@
           ${Object.entries(s.channels || {}).map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(fmt(v))}</dd>`).join('')}
         </dl>
         ${agentUrl ? `<div class="pushbox agentbox"><b>🪟 Windows-Agent installieren</b>
-          <ol><li><a href="${esc(agentUrl)}">ReloadAgent.ps1 herunterladen</a> (enthält Server-Adresse und Token) und per Rechtsklick „Mit PowerShell ausführen“ – oder</li>
+          <ol><li><a href="${esc(agentUrl)}">SignalwarteAgent.ps1 herunterladen</a> (enthält Server-Adresse und Token) und per Rechtsklick „Mit PowerShell ausführen“ – oder</li>
           <li>in einer <b>Administrator-PowerShell</b> auf dem Server einfügen:</li></ol>
-          <textarea readonly rows="3" onclick="this.select()">iwr -UseBasicParsing '${esc(agentUrl)}' -OutFile "$env:TEMP\\ReloadAgent.ps1"; powershell -ExecutionPolicy Bypass -File "$env:TEMP\\ReloadAgent.ps1"</textarea>
-          <small>Installiert sich nach <code>C:\\ProgramData\\ReloadAgent</code> als geplante Aufgabe (SYSTEM). Status: <code>C:\\ProgramData\\ReloadAgent\\ReloadAgent.ps1 -Status</code>, Test: <code>-Test</code>, Entfernen: <code>-Uninstall</code>. Der Server muss ${esc(location.host)} per HTTPS erreichen.</small></div>` : ''}
+          <textarea readonly rows="3" onclick="this.select()">iwr -UseBasicParsing '${esc(agentUrl)}' -OutFile "$env:TEMP\\SignalwarteAgent.ps1"; powershell -ExecutionPolicy Bypass -File "$env:TEMP\\SignalwarteAgent.ps1"</textarea>
+          <small>Installiert sich nach <code>C:\\ProgramData\\SignalwarteAgent</code> als geplante Aufgabe (SYSTEM). Status: <code>C:\\ProgramData\\SignalwarteAgent\\SignalwarteAgent.ps1 -Status</code>, Test: <code>-Test</code>, Entfernen: <code>-Uninstall</code>. Der Server muss ${esc(location.host)} per HTTPS erreichen.</small></div>` : ''}
         ${pushUrl ? `<div class="pushbox"><b>Push-URL</b><input readonly value="${esc(pushUrl)}&value=42&status=up&msg=OK" onclick="this.select()"><small>Parameter: <code>value</code> (Zahl), <code>status</code> up|warning|down, <code>msg</code> Text. Bleibt die Meldung länger als das Intervall aus, geht der Sensor auf Fehler.</small></div>` : ''}
         <div class="chartbox"><div class="ranges">${[[3600, '1 h'], [86400, '24 h'], [604800, '7 T'], [2592000, '30 T']].map(([r, l]) => `<button class="fbtn${r === range ? ' on' : ''}" data-act="range" data-r="${r}">${l}</button>`).join('')}</div>
           ${chans.length ? `<div class="ranges chans"><button class="fbtn${!S.chartChannel ? ' on' : ''}" data-act="chan" data-c="">Hauptwert</button>${chans.map(([k]) => `<button class="fbtn${S.chartChannel === k ? ' on' : ''}" data-act="chan" data-c="${esc(k)}">${esc(k)}</button>`).join('')}</div>` : ''}<div class="chartwrap"><canvas id="sensorChart"></canvas></div></div>
@@ -1123,11 +1123,11 @@
   }
 
   function showRecovery(codes, renewed) {
-    const txt = 'Reload Monitor – Wiederherstellungscodes (' + S.boot.user.username + ', ' + new Date().toLocaleString('de-DE') + ')\nJeder Code funktioniert genau einmal.\n\n' + codes.join('\n') + '\n';
+    const txt = 'Signalwarte – Wiederherstellungscodes (' + S.boot.user.username + ', ' + new Date().toLocaleString('de-DE') + ')\nJeder Code funktioniert genau einmal.\n\n' + codes.join('\n') + '\n';
     modal(`<div><h2>${renewed ? 'Neue ' : '✅ 2FA aktiv – '}Wiederherstellungscodes</h2>
       <p>Bewahre diese Codes sicher auf (z. B. im Passwortmanager). Jeder Code ersetzt <b>einmal</b> den App-Code, falls du dein Handy verlierst. Sie werden nur jetzt angezeigt.${renewed ? ' Die alten Codes sind ab sofort ungültig.' : ''}</p>
       <div class="recovery">${codes.map((c) => `<code>${esc(c)}</code>`).join('')}</div>
-      <div class="mfoot"><button type="button" class="btn" id="recCopy">Kopieren</button><a class="btn" id="recDl" download="reload-monitor-wiederherstellungscodes.txt">Als Datei speichern</a><button type="button" class="btn primary" id="recDone">Gespeichert – fertig</button></div></div>`);
+      <div class="mfoot"><button type="button" class="btn" id="recCopy">Kopieren</button><a class="btn" id="recDl" download="signalwarte-wiederherstellungscodes.txt">Als Datei speichern</a><button type="button" class="btn primary" id="recDone">Gespeichert – fertig</button></div></div>`);
     $('#recDl').href = URL.createObjectURL(new Blob([txt], { type: 'text/plain' }));
     $('#recCopy').addEventListener('click', () => navigator.clipboard.writeText(txt).then(() => toast('Kopiert')));
     $('#recDone').addEventListener('click', async () => {

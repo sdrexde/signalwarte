@@ -1,4 +1,4 @@
-# Reload Monitor – Installationsanleitung
+# Signalwarte – Installationsanleitung
 
 Schritt-für-Schritt-Anleitung für eine Installation auf einem **eigenen Proxmox-LXC** (oder einer VM) mit
 **Debian 13 (trixie)**. Sie ist so geschrieben, dass sie von einem Menschen **oder einem KI-Agenten** (z. B. Maik/OpenClaw,
@@ -38,17 +38,17 @@ Weiter erst, wenn die Prüfung passt.
 | Webserver | Apache 2 + PHP ≥ 8.1 (`pdo_sqlite`, `curl`, `mbstring`, `intl`, `pcntl` im CLI) |
 | Datenbank | SQLite-Datei unter `<App>/data/monitor.sqlite` – kein Datenbankserver nötig |
 | Hintergrunddienst | Cron startet jede Minute `cron/poller.php` als `www-data` |
-| Installationspfad | `/var/www/reload-monitor` (Webroot = dieser Ordner, App unter `/`) |
+| Installationspfad | `/var/www/signalwarte` (Webroot = dieser Ordner, App unter `/`) |
 | Netzwerk | Der LXC muss **alle zu überwachenden Netze erreichen** (siehe [Abschnitt 8](#8-firewall-regeln-pfsense)) |
 
 Was das Installationsskript `install/install.sh` erledigt:
 
 - Pakete installieren: `apache2 libapache2-mod-php php-cli php-sqlite3 php-curl php-mbstring php-intl iputils-ping cron git curl ca-certificates libcap2-bin`
-- Apache-vHost `/etc/apache2/sites-available/reload-monitor.conf` anlegen (DocumentRoot = App-Ordner, `mod_remoteip` für die echte Client-IP hinter dem Proxy, interne Ordner gesperrt), `000-default` deaktivieren
+- Apache-vHost `/etc/apache2/sites-available/signalwarte.conf` anlegen (DocumentRoot = App-Ordner, `mod_remoteip` für die echte Client-IP hinter dem Proxy, interne Ordner gesperrt), `000-default` deaktivieren
 - Rechte setzen (`www-data`, `data/` = 770)
 - `ping` für `www-data` freischalten (Capability `cap_net_raw`, nötig in unprivilegierten LXC)
 - Datenbank anlegen bzw. migrieren
-- Cron-Datei `/etc/cron.d/reload-monitor` anlegen und den Poller einmal starten
+- Cron-Datei `/etc/cron.d/signalwarte` anlegen und den Poller einmal starten
 - optional: ein Backup importieren (`--import`)
 
 ---
@@ -91,11 +91,11 @@ ping -c1 -W2 deb.debian.org      # erwartet: 1 received
 
 ## 3. Code von GitHub holen
 
-Das Repository `sdrexde/prtg_reload` ist privat → Zugriff per **Deploy-Key** (nur Lesen).
+Das Repository `sdrexde/signalwarte` ist privat → Zugriff per **Deploy-Key** (nur Lesen).
 
 ```bash
 apt-get update && apt-get install -y git openssh-client
-ssh-keygen -t ed25519 -N "" -C "reload-monitor@$(hostname)" -f ~/.ssh/id_ed25519
+ssh-keygen -t ed25519 -N "" -C "signalwarte@$(hostname)" -f ~/.ssh/id_ed25519
 cat ~/.ssh/id_ed25519.pub
 ```
 
@@ -119,14 +119,14 @@ chmod 600 ~/.ssh/config
 
 ```bash
 ssh -o StrictHostKeyChecking=accept-new -T git@github.com
-# erwartet: "Hi sdrexde/prtg_reload! You've successfully authenticated, but GitHub does not provide shell access."
+# erwartet: "Hi sdrexde/signalwarte! You've successfully authenticated, but GitHub does not provide shell access."
 ```
 
 Klonen:
 
 ```bash
-git clone git@github.com:sdrexde/prtg_reload.git /var/www/reload-monitor
-ls /var/www/reload-monitor/install/install.sh      # erwartet: Pfad wird angezeigt
+git clone git@github.com:sdrexde/signalwarte.git /var/www/signalwarte
+ls /var/www/signalwarte/install/install.sh      # erwartet: Pfad wird angezeigt
 ```
 
 ---
@@ -136,13 +136,13 @@ ls /var/www/reload-monitor/install/install.sh      # erwartet: Pfad wird angezei
 **Neuinstallation (leer):**
 
 ```bash
-bash /var/www/reload-monitor/install/install.sh
+bash /var/www/signalwarte/install/install.sh
 ```
 
 **Mit Datenübernahme** (Backup aus [Abschnitt 5](#5-daten-von-einer-bestehenden-instanz-übernehmen-umzug)):
 
 ```bash
-bash /var/www/reload-monitor/install/install.sh --import /root/reload-monitor.sqlite
+bash /var/www/signalwarte/install/install.sh --import /root/signalwarte.sqlite
 ```
 
 Optional `--name monitor.example.de` für den `ServerName` im vHost.
@@ -153,7 +153,7 @@ Erwartete letzte Zeilen der Ausgabe:
 ==> Datenbank initialisieren / migrieren
     Schema v5            (oder höher)
 ==> Poller (Cron) einrichten
-Fertig. Reload Monitor läuft unter:  http://<IP>/
+Fertig. Signalwarte läuft unter:  http://<IP>/
 ```
 
 Das Skript kann gefahrlos **erneut ausgeführt** werden (z. B. nach einer Netzwerkänderung). Mit `--import` wird eine vorhandene
@@ -166,18 +166,18 @@ Datenbank vorher als `data/monitor.sqlite.vor-import.<Zeitstempel>` gesichert.
 Auf dem **alten** Server (Beispiel: bisherige Instanz unter `/var/www/html/maik/monitor` auf nexus/webclaude):
 
 ```bash
-bash /var/www/html/maik/monitor/tools/backup.sh /root/reload-monitor.sqlite
-# erwartet: "Backup: /root/reload-monitor.sqlite (… K)"
-scp /root/reload-monitor.sqlite root@<LXC-IP>:/root/
+bash /var/www/html/maik/monitor/tools/backup.sh /root/signalwarte.sqlite
+# erwartet: "Backup: /root/signalwarte.sqlite (… K)"
+scp /root/signalwarte.sqlite root@<LXC-IP>:/root/
 ```
 
 Das Backup wird im laufenden Betrieb konsistent erstellt (SQLite `VACUUM INTO`) und enthält **alles**: Geräte, Sensoren,
 Messwerte, Maps, Benutzer inkl. 2FA, Benachrichtigungen, Icons, Zugangsdaten. → **Vertraulich behandeln**, nach dem Import löschen.
 
-Dann auf dem LXC [Schritt 4](#4-installieren) mit `--import /root/reload-monitor.sqlite` ausführen und anschließend:
+Dann auf dem LXC [Schritt 4](#4-installieren) mit `--import /root/signalwarte.sqlite` ausführen und anschließend:
 
 ```bash
-shred -u /root/reload-monitor.sqlite   # Backup-Kopie entfernen
+shred -u /root/signalwarte.sqlite   # Backup-Kopie entfernen
 ```
 
 Alternative ohne SSH zwischen den Servern: In der alten Instanz **Einstellungen › Datensicherung › Datenbank herunterladen (.sqlite)**,
@@ -190,14 +190,14 @@ Datei per Browser/WinSCP auf den LXC kopieren.
 Alle Befehle im LXC ausführen:
 
 ```bash
-APP=/var/www/reload-monitor
+APP=/var/www/signalwarte
 
 # 1) Weboberfläche antwortet (302 = Weiterleitung zu Login/Ersteinrichtung)
 curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1/              # erwartet: 302
 curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1/login.php     # erwartet: 200 (bzw. 302 → setup.php bei leerer Installation)
 
 # 2) Interne Ordner sind gesperrt
-for p in data/monitor.sqlite lib/db.php cron/poller.php agent/ReloadAgent.ps1 tools/backup.sh install/install.sh; do
+for p in data/monitor.sqlite lib/db.php cron/poller.php agent/SignalwarteAgent.ps1 tools/backup.sh install/install.sh; do
   printf '%s %s\n' "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1/$p)" "$p"
 done                                                                     # erwartet: überall 403
 
@@ -206,7 +206,7 @@ su -s /bin/sh www-data -c "php -r 'require \"$APP/lib/engine.php\"; echo db()->q
                                                                          # erwartet: 5 (oder höher)
 
 # 4) Poller läuft per Cron
-cat /etc/cron.d/reload-monitor                                           # erwartet: * * * * * www-data php …/cron/poller.php …
+cat /etc/cron.d/signalwarte                                           # erwartet: * * * * * www-data php …/cron/poller.php …
 su -s /bin/sh www-data -c "php $APP/cron/poller.php --once --verbose"    # erwartet: Liste geprüfter Sensoren (oder keine Ausgabe, wenn nichts fällig)
 
 # 5) ping funktioniert für www-data
@@ -226,8 +226,8 @@ Der Monitor selbst spricht nur HTTP auf Port 80. HTTPS wird am vorgelagerten Pro
 
 **pfSense → Services → HAProxy:**
 
-1. **Backend** `reload-monitor`: Server `<LXC-IP>` Port `80`, Health-Check `HTTP` auf `/login.php`
-2. **Frontend** (bestehendes HTTPS-Frontend): ACL `host matches monitor.example.de` → Backend `reload-monitor`
+1. **Backend** `signalwarte`: Server `<LXC-IP>` Port `80`, Health-Check `HTTP` auf `/login.php`
+2. **Frontend** (bestehendes HTTPS-Frontend): ACL `host matches monitor.example.de` → Backend `signalwarte`
 3. Im Frontend „**Use forwardfor option**“ aktivieren (setzt `X-Forwarded-For`)
 4. Zusätzlich (Advanced / Backend pass thru): `http-request set-header X-Forwarded-Proto https`
 
@@ -239,12 +239,12 @@ Der Monitor selbst spricht nur HTTP auf Port 80. HTTPS wird am vorgelagerten Pro
 
 ```bash
 curl -sI https://monitor.example.de/login.php | grep -i set-cookie
-# erwartet: …RELOADMONSESS=…; path=/; secure; HttpOnly; SameSite=Lax   ← "secure" = HTTPS wird erkannt
+# erwartet: …SIGNALWARTESESS=…; path=/; secure; HttpOnly; SameSite=Lax   ← "secure" = HTTPS wird erkannt
 ```
 
 Andere Proxys (nginx, Caddy, Traefik) funktionieren genauso: auf `http://<LXC-IP>:80` weiterleiten und `X-Forwarded-For`
 sowie `X-Forwarded-Proto` setzen. Die erlaubten Proxy-Netze (`RemoteIPInternalProxy`) stehen in
-`/etc/apache2/sites-available/reload-monitor.conf` (Standard: 127.0.0.1, 10/8, 172.16/12, 192.168/16).
+`/etc/apache2/sites-available/signalwarte.conf` (Standard: 127.0.0.1, 10/8, 172.16/12, 192.168/16).
 
 ---
 
@@ -287,7 +287,7 @@ timeout 3 bash -c 'echo > /dev/tcp/192.168.101.254/49000' && echo "TR-064 offen"
 3. **Einstellungen › System › Sicherheit**: ggf. 2FA für alle vorschreiben
 4. **Geräte → Netzwerk scannen**: Netze eintragen, DHCP-Bereiche als Ausschluss hinterlegen, Geräte übernehmen
 5. **Einstellungen › Benachrichtigungen**: mindestens zwei Wege (z. B. Telegram + E-Mail)
-6. Windows-Server: Sensor „Windows-Agent“ anlegen → in den Sensor-Details `ReloadAgent.ps1` herunterladen und auf dem Server ausführen
+6. Windows-Server: Sensor „Windows-Agent“ anlegen → in den Sensor-Details `SignalwarteAgent.ps1` herunterladen und auf dem Server ausführen
 
 ---
 
@@ -296,7 +296,7 @@ timeout 3 bash -c 'echo > /dev/tcp/192.168.101.254/49000' && echo "TR-064 offen"
 Erst wenn die neue Instanz läuft und geprüft ist – auf dem **alten** Server:
 
 ```bash
-rm /etc/cron.d/reload-monitor            # sonst prüfen beide Instanzen und senden doppelte Benachrichtigungen
+rm -f /etc/cron.d/signalwarte /etc/cron.d/reload-monitor   # (alter Name) – sonst prüfen beide Instanzen und senden doppelte Benachrichtigungen
 ```
 
 Optional die alte Weboberfläche entfernen bzw. per Proxy auf die neue umleiten.
@@ -310,7 +310,7 @@ und ausführen – er überschreibt die Installation. Bleibt die Adresse gleich 
 ## 11. Updates
 
 ```bash
-cd /var/www/reload-monitor
+cd /var/www/signalwarte
 git pull --ff-only
 chown -R www-data:www-data .
 ```
@@ -324,7 +324,7 @@ Prüfen: Version steht unter **Einstellungen › System** unten.
 
 | Was | Wie |
 |---|---|
-| Komplett (empfohlen, regelmäßig) | `bash /var/www/reload-monitor/tools/backup.sh /root/backup/monitor-$(date +%F).sqlite` |
+| Komplett (empfohlen, regelmäßig) | `bash /var/www/signalwarte/tools/backup.sh /root/backup/monitor-$(date +%F).sqlite` |
 | Komplett per Browser | Einstellungen › Datensicherung › Datenbank herunterladen |
 | Nur Konfiguration (JSON) | Einstellungen › Datensicherung › Export (optional mit Zugangsdaten) |
 | Wiederherstellen (komplett) | `bash install/install.sh --import <datei.sqlite>` |
@@ -334,8 +334,8 @@ Beispiel für ein nächtliches Backup mit 14 Tagen Aufbewahrung:
 
 ```bash
 mkdir -p /root/backup
-cat > /etc/cron.d/reload-monitor-backup <<'EOF'
-15 3 * * * root bash /var/www/reload-monitor/tools/backup.sh /root/backup/monitor-$(date +\%F).sqlite >/dev/null 2>&1; find /root/backup -name 'monitor-*.sqlite' -mtime +14 -delete
+cat > /etc/cron.d/signalwarte-backup <<'EOF'
+15 3 * * * root bash /var/www/signalwarte/tools/backup.sh /root/backup/monitor-$(date +\%F).sqlite >/dev/null 2>&1; find /root/backup -name 'monitor-*.sqlite' -mtime +14 -delete
 EOF
 ```
 
@@ -347,28 +347,28 @@ Zusätzlich sichert natürlich auch ein Proxmox-Backup des LXC alles mit.
 
 | Symptom | Ursache / Lösung |
 |---|---|
-| Gelbe Leiste „Poller läuft nicht“ | `systemctl status cron`; `cat /etc/cron.d/reload-monitor`; manuell: `su -s /bin/sh www-data -c "php /var/www/reload-monitor/cron/poller.php --once --verbose"` |
+| Gelbe Leiste „Poller läuft nicht“ | `systemctl status cron`; `cat /etc/cron.d/signalwarte`; manuell: `su -s /bin/sh www-data -c "php /var/www/signalwarte/cron/poller.php --once --verbose"` |
 | Alle Ping-Sensoren „Fehler“ | `su -s /bin/sh www-data -c "ping -c1 127.0.0.1"` – wenn das scheitert: `setcap cap_net_raw+ep $(command -v ping)` oder `sysctl -w net.ipv4.ping_group_range="0 2147483647"` |
 | Sensoren in anderen Netzen „Fehler“, lokal OK | Firewall-Regeln ([Abschnitt 8](#8-firewall-regeln-pfsense)); Test mit `ping` / `/dev/tcp` aus dem LXC |
 | SNMP „Zeitüberschreitung“ | Community falsch, SNMP-Dienst aus, UDP 161 blockiert oder an falsches Interface gebunden |
 | FRITZ!Box „Keine TR-064/UPnP-Daten“ | Optionen aus [Abschnitt 8](#8-firewall-regeln-pfsense) in der FRITZ!Box aktivieren; Port 49000 erreichbar? |
-| „Datenbankfehler … readonly“ / Fehler 500 | Rechte: `chown -R www-data:www-data /var/www/reload-monitor && chmod 770 /var/www/reload-monitor/data` – **nie als root gegen die Live-DB arbeiten** (WAL-Dateien gehören dann root) |
-| Windows-Agent meldet nicht | Auf dem Server: `C:\ProgramData\ReloadAgent\ReloadAgent.ps1 -Status` bzw. `-Test`; Proxy setzt `X-Forwarded-Proto`? Server erreicht Monitor-URL per HTTPS? |
-| Anmeldung gesperrt | `su -s /bin/sh www-data -c "php /var/www/reload-monitor/tools/user-admin.php unlock"` |
-| 2FA verloren (Handy + Codes) | `su -s /bin/sh www-data -c "php /var/www/reload-monitor/tools/user-admin.php reset-2fa <benutzer>"` |
-| Passwort vergessen | `su -s /bin/sh www-data -c "php /var/www/reload-monitor/tools/user-admin.php set-password <benutzer> '<neu>'"` |
+| „Datenbankfehler … readonly“ / Fehler 500 | Rechte: `chown -R www-data:www-data /var/www/signalwarte && chmod 770 /var/www/signalwarte/data` – **nie als root gegen die Live-DB arbeiten** (WAL-Dateien gehören dann root) |
+| Windows-Agent meldet nicht | Auf dem Server: `C:\ProgramData\SignalwarteAgent\SignalwarteAgent.ps1 -Status` bzw. `-Test`; Proxy setzt `X-Forwarded-Proto`? Server erreicht Monitor-URL per HTTPS? |
+| Anmeldung gesperrt | `su -s /bin/sh www-data -c "php /var/www/signalwarte/tools/user-admin.php unlock"` |
+| 2FA verloren (Handy + Codes) | `su -s /bin/sh www-data -c "php /var/www/signalwarte/tools/user-admin.php reset-2fa <benutzer>"` |
+| Passwort vergessen | `su -s /bin/sh www-data -c "php /var/www/signalwarte/tools/user-admin.php set-password <benutzer> '<neu>'"` |
 
-Logs: `/var/log/apache2/reload-monitor-error.log`, in der Oberfläche **Protokoll** (Statuswechsel, Anmeldungen, Benachrichtigungen).
+Logs: `/var/log/apache2/signalwarte-error.log`, in der Oberfläche **Protokoll** (Statuswechsel, Anmeldungen, Benachrichtigungen).
 
 ---
 
 ## 14. Deinstallation
 
 ```bash
-rm -f /etc/cron.d/reload-monitor /etc/cron.d/reload-monitor-backup
-a2dissite reload-monitor && systemctl reload apache2
-rm -f /etc/apache2/sites-available/reload-monitor.conf
-rm -rf /var/www/reload-monitor            # löscht auch die Datenbank – vorher Backup!
+rm -f /etc/cron.d/signalwarte /etc/cron.d/signalwarte-backup
+a2dissite signalwarte && systemctl reload apache2
+rm -f /etc/apache2/sites-available/signalwarte.conf
+rm -rf /var/www/signalwarte            # löscht auch die Datenbank – vorher Backup!
 ```
 
 Den Deploy-Key auf GitHub entfernen (Settings → Deploy keys).
@@ -383,7 +383,7 @@ Jeder Schritt muss mit Exit-Code 0 enden, sonst abbrechen und melden.
 
 ```bash
 set -euo pipefail
-APP=/var/www/reload-monitor
+APP=/var/www/signalwarte
 
 # 1. Voraussetzungen
 apt-get update -qq && apt-get install -y -qq git openssh-client curl
@@ -391,12 +391,12 @@ test -f ~/.ssh/id_ed25519 || { echo "FEHLT: Deploy-Key (Abschnitt 3)"; exit 1; }
 { ssh -o StrictHostKeyChecking=accept-new -T git@github.com 2>&1 || true; } | grep -q "successfully authenticated"
 
 # 2. Code
-test -d $APP/.git || git clone git@github.com:sdrexde/prtg_reload.git $APP
+test -d $APP/.git || git clone git@github.com:sdrexde/signalwarte.git $APP
 git -C $APP pull --ff-only
 
 # 3. Installation (mit Import, falls Backup vorhanden)
-if [ -f /root/reload-monitor.sqlite ]; then
-  bash $APP/install/install.sh --import /root/reload-monitor.sqlite
+if [ -f /root/signalwarte.sqlite ]; then
+  bash $APP/install/install.sh --import /root/signalwarte.sqlite
 else
   bash $APP/install/install.sh
 fi
@@ -406,9 +406,9 @@ test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1/)" = "302"
 test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1/data/monitor.sqlite)" = "403"
 test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1/lib/db.php)" = "403"
 su -s /bin/sh www-data -c "php $APP/cron/poller.php --once"
-test -f /etc/cron.d/reload-monitor
+test -f /etc/cron.d/signalwarte
 su -s /bin/sh www-data -c "ping -c1 -W1 127.0.0.1" >/dev/null
-echo "OK: Reload Monitor installiert unter http://$(hostname -I | awk '{print $1}')/"
+echo "OK: Signalwarte installiert unter http://$(hostname -I | awk '{print $1}')/"
 ```
 
 Danach an den Menschen melden: LXC-IP, ob mit Import installiert wurde, und die **offenen manuellen Schritte**:

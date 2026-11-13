@@ -1,4 +1,4 @@
-# Reload Monitor
+# Signalwarte
 
 Schlankes, selbst gehostetes **Netzwerk-Monitoring im Stil von PRTG** – mit einem **Map-Editor, der sich wie draw.io bedienen lässt**.
 PHP 8 + SQLite + Vanilla JS, keine Build-Tools, kein Framework.
@@ -58,7 +58,7 @@ public.php       Daten für öffentliche Maps (nur Objekte der Map)
 setup.php        Ersteinrichtung (Admin + optional Beispieldaten), danach gesperrt
 login.php / logout.php
 agent.php        liefert den Windows-Agenten mit eingesetzter URL + Token aus
-agent/           ReloadAgent.ps1 (Vorlage, per .htaccess gesperrt)
+agent/           SignalwarteAgent.ps1 (Vorlage, per .htaccess gesperrt)
 cron/poller.php  Probe: prüft fällige Sensoren parallel (pcntl_fork), per Cron jede Minute
 lib/             bootstrap (Config/Auth/Helfer), db (Schema + Migrationen), sensors (Typen + Prüfungen),
                  engine (Status/Baum/Retry), notify (Benachrichtigungen), snmp (SNMP v1/v2c in reinem PHP),
@@ -78,12 +78,12 @@ Voraussetzungen: PHP ≥ 8.1 mit `pdo_sqlite`, `curl`, `openssl`, optional `pcnt
 
 ```bash
 cd /var/www/html/maik
-git clone git@github.com:sdrexde/prtg_reload.git monitor
+git clone git@github.com:sdrexde/signalwarte.git monitor
 chown -R www-data:www-data monitor
 chmod 770 monitor/data
 
 # Poller jede Minute als www-data
-echo '* * * * * www-data php /var/www/html/maik/monitor/cron/poller.php >/dev/null 2>&1' > /etc/cron.d/reload-monitor
+echo '* * * * * www-data php /var/www/html/maik/monitor/cron/poller.php >/dev/null 2>&1' > /etc/cron.d/signalwarte
 ```
 
 Dann `https://<domain>/monitor/` aufrufen → Ersteinrichtung (Admin-Konto anlegen).
@@ -104,21 +104,21 @@ apt-get update && apt-get install -y git
 ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_ed25519 && cat ~/.ssh/id_ed25519.pub   # → als Deploy-Key eintragen
 # falls Port 22 nach außen gesperrt ist: SSH über Port 443
 printf 'Host github.com\n  HostName ssh.github.com\n  Port 443\n' >> ~/.ssh/config
-git clone git@github.com:sdrexde/prtg_reload.git /var/www/reload-monitor
+git clone git@github.com:sdrexde/signalwarte.git /var/www/signalwarte
 ```
 
 **3. Daten vom alten Server sichern und kopieren**
 
 ```bash
 # alter Server
-bash /var/www/html/maik/monitor/tools/backup.sh /root/reload-monitor.sqlite
-scp /root/reload-monitor.sqlite root@<LXC-IP>:/root/
+bash /var/www/html/maik/monitor/tools/backup.sh /root/signalwarte.sqlite
+scp /root/signalwarte.sqlite root@<LXC-IP>:/root/
 ```
 
 **4. Installieren** (Apache, PHP, vHost auf `/`, Cron, Rechte, ping für www-data, Datenübernahme):
 
 ```bash
-bash /var/www/reload-monitor/install/install.sh --import /root/reload-monitor.sqlite
+bash /var/www/signalwarte/install/install.sh --import /root/signalwarte.sqlite
 ```
 
 Ohne `--import` startet eine leere Installation mit Ersteinrichtung.
@@ -128,7 +128,7 @@ Ohne `--import` startet eine leere Installation mit Ersteinrichtung.
   `X-Forwarded-Proto: https` setzen, sonst bekommen Windows-Agenten eine http-URL.
 - Windows-Agenten: Bleibt die Adresse (z. B. nexus.sdrex.de/monitor → neue Domain), müssen sie neu heruntergeladen werden,
   sonst melden sie weiter an die alte URL. Gleiche URL beibehalten = nichts zu tun.
-- Alten Server abschalten: `rm /etc/cron.d/reload-monitor` (sonst prüfen beide).
+- Alten Server abschalten: `rm /etc/cron.d/signalwarte` (sonst prüfen beide).
 
 **6. Firewall (pfSense)** – Alias `Monitor` = LXC-IP, auf allen Interfaces mit zu überwachenden Netzen erlauben:
 
@@ -149,18 +149,18 @@ cd /var/www/html/maik/monitor && git pull && chown -R www-data:www-data .
 ## Windows-Server (Agent)
 
 Wie bei Spurwerk: Sensor **„Windows-Agent“** am Gerät anlegen (oder Vorlage „Windows-Server“ / „Domänencontroller“) →
-in den Sensor-Details **ReloadAgent.ps1 herunterladen** (Server-Adresse + Token sind eingesetzt) → auf dem Server
+in den Sensor-Details **SignalwarteAgent.ps1 herunterladen** (Server-Adresse + Token sind eingesetzt) → auf dem Server
 per Rechtsklick „Mit PowerShell ausführen“ oder den angezeigten Einzeiler in einer Administrator-PowerShell einfügen.
 
-Der Agent installiert sich nach `C:\ProgramData\ReloadAgent`, läuft als geplante Aufgabe unter SYSTEM und meldet:
+Der Agent installiert sich nach `C:\ProgramData\SignalwarteAgent`, läuft als geplante Aufgabe unter SYSTEM und meldet:
 CPU %, RAM %, freier Speicher je Laufwerk (% und GB), Laufzeit, Prozesse, gestoppte Auto-Dienste, überwachte Dienste
 (im Sensor eintragen, z. B. `NTDS,DNS,MSSQLSERVER`), Neustart ausstehend, Fehler in der Ereignisanzeige (1 h),
 Tage seit letztem Update, Defender-Status/Signaturalter, Netzwerk ein/aus. Grenzen für Laufwerke im Sensor einstellbar.
 
 ```powershell
-C:\ProgramData\ReloadAgent\ReloadAgent.ps1 -Status     # Zustand + Log
-C:\ProgramData\ReloadAgent\ReloadAgent.ps1 -Test       # Werte anzeigen und senden
-C:\ProgramData\ReloadAgent\ReloadAgent.ps1 -Uninstall  # entfernen
+C:\ProgramData\SignalwarteAgent\SignalwarteAgent.ps1 -Status     # Zustand + Log
+C:\ProgramData\SignalwarteAgent\SignalwarteAgent.ps1 -Test       # Werte anzeigen und senden
+C:\ProgramData\SignalwarteAgent\SignalwarteAgent.ps1 -Uninstall  # entfernen
 ```
 
 ## pfSense / OPNsense (SNMP)
@@ -190,7 +190,7 @@ Anzahl bekannter Geräte. Repeater/IP-Client: Vorlage „FRITZ!Repeater“ (ohne
 - **Notfall auf dem Server** (Admin hat Handy und Codes verloren):
 
 ```bash
-cd /var/www/reload-monitor   # bzw. /var/www/html/maik/monitor
+cd /var/www/signalwarte   # bzw. /var/www/html/maik/monitor
 su -s /bin/sh www-data -c "php tools/user-admin.php list"
 su -s /bin/sh www-data -c "php tools/user-admin.php reset-2fa admin"
 su -s /bin/sh www-data -c "php tools/user-admin.php unlock"            # Anmeldesperren aufheben

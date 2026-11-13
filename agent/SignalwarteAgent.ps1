@@ -1,24 +1,24 @@
 <#
 .SYNOPSIS
-    Reload-Monitor Windows-Agent: meldet Systemzustand (CPU, RAM, Laufwerke, Dienste, Updates,
-    Neustart, Ereignisanzeige, Defender, Netzwerk) an Reload Monitor.
+    Signalwarte Windows-Agent: meldet Systemzustand (CPU, RAM, Laufwerke, Dienste, Updates,
+    Neustart, Ereignisanzeige, Defender, Netzwerk) an Signalwarte.
 
 .DESCRIPTION
     Reines PowerShell-Skript (Windows PowerShell 5.1 oder neuer), keine Zusatzsoftware noetig.
     Laeuft als geplante Aufgabe unter dem Konto SYSTEM und startet automatisch mit Windows.
 
     Ohne Parameter          Installiert den Agenten (fordert Administratorrechte an)
-    -Install                Installiert nach C:\ProgramData\ReloadAgent und richtet die Aufgabe ein
+    -Install                Installiert nach C:\ProgramData\SignalwarteAgent und richtet die Aufgabe ein
     -Uninstall              Entfernt Aufgabe und Programmverzeichnis
     -Status                 Zeigt Zustand der Aufgabe und die letzten Logzeilen
     -Test                   Sammelt einmal alle Werte, zeigt sie an und sendet sie
     -Run                    Agent-Schleife (wird von der geplanten Aufgabe gestartet)
 
-    Konfiguration: C:\ProgramData\ReloadAgent\config.json
+    Konfiguration: C:\ProgramData\SignalwarteAgent\config.json
     Die zu ueberwachenden Dienste und das Intervall kommen vom Server (Sensor bearbeiten).
 
 .NOTES
-    Wird von Reload Monitor beim Download mit Server-Adresse und Token versehen.
+    Wird von Signalwarte beim Download mit Server-Adresse und Token versehen.
     Datei bewusst nur mit ASCII-Zeichen, damit Windows PowerShell 5.1 sie ohne BOM korrekt liest.
 #>
 [CmdletBinding()]
@@ -31,19 +31,19 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$AgentVersion = '1.0.0'
-$TaskName = 'ReloadAgent'
-$InstallDir = Join-Path $env:ProgramData 'ReloadAgent'
-$InstalledScript = Join-Path $InstallDir 'ReloadAgent.ps1'
+$AgentVersion = '1.1.0'
+$TaskName = 'SignalwarteAgent'
+$InstallDir = Join-Path $env:ProgramData 'SignalwarteAgent'
+$InstalledScript = Join-Path $InstallDir 'SignalwarteAgent.ps1'
 $ConfigPath = Join-Path $InstallDir 'config.json'
 $StatePath = Join-Path $InstallDir 'state.json'
 $LogPath = Join-Path $InstallDir 'agent.log'
 $Invariant = [Globalization.CultureInfo]::InvariantCulture
 $script:Interactive = $false
 
-# Beim Download von Reload Monitor eingesetzt (Push-URL inkl. Token)
+# Beim Download von Signalwarte eingesetzt (Push-URL inkl. Token)
 $EmbeddedConfig = @'
-__RELOAD_CONFIG__
+__SIGNALWARTE_CONFIG__
 '@
 
 # Automatische Dienste, die regelmaessig ohne Fehler gestoppt sind (Trigger-Start / verzoegert)
@@ -75,7 +75,7 @@ function Test-Admin {
 
 function Get-EmbeddedConfig {
     $t = $EmbeddedConfig.Trim()
-    if (-not $t -or $t -like '__RELOAD*') { return $null }
+    if (-not $t -or $t -like '__SIGNALWARTE*') { return $null }
     return $t | ConvertFrom-Json
 }
 
@@ -83,7 +83,7 @@ function Get-AgentConfig {
     if (Test-Path $ConfigPath) { return Get-Content $ConfigPath -Raw | ConvertFrom-Json }
     $e = Get-EmbeddedConfig
     if ($e) { return $e }
-    throw 'Keine Konfiguration gefunden. Skript bitte ueber Reload Monitor (Sensor-Details) herunterladen.'
+    throw 'Keine Konfiguration gefunden. Skript bitte ueber Signalwarte (Sensor-Details) herunterladen.'
 }
 
 function Read-State {
@@ -246,7 +246,7 @@ function Stop-AgentProcesses {
     try { Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue } catch { }
     try {
         Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" |
-            Where-Object { $_.CommandLine -like '*ReloadAgent.ps1*-Run*' } |
+            Where-Object { $_.CommandLine -like '*SignalwarteAgent.ps1*-Run*' } |
             ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
     } catch { }
 }
@@ -254,10 +254,23 @@ function Stop-AgentProcesses {
 function Install-Agent {
     $cfg = Get-EmbeddedConfig
     if (-not $cfg -and -not (Test-Path $ConfigPath)) {
-        throw 'Dieses Skript enthaelt keine Konfiguration. Bitte ueber Reload Monitor herunterladen (Sensor "Windows-/Linux-Agent" -> Details).'
+        throw 'Dieses Skript enthaelt keine Konfiguration. Bitte ueber Signalwarte herunterladen (Sensor "Windows-/Linux-Agent" -> Details).'
     }
-    Write-Host "ReloadAgent $AgentVersion wird installiert ..." -ForegroundColor Cyan
+    Write-Host "SignalwarteAgent $AgentVersion wird installiert ..." -ForegroundColor Cyan
     Stop-AgentProcesses
+    # Vorgaenger unter altem Namen (ReloadAgent) entfernen
+    $legacyDir = Join-Path $env:ProgramData ('Rel' + 'oadAgent')
+    if (Get-ScheduledTask -TaskName ('Rel' + 'oadAgent') -ErrorAction SilentlyContinue) {
+        try { Stop-ScheduledTask -TaskName ('Rel' + 'oadAgent') -ErrorAction SilentlyContinue } catch { }
+        Unregister-ScheduledTask -TaskName ('Rel' + 'oadAgent') -Confirm:$false -ErrorAction SilentlyContinue
+        try {
+            Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" |
+                Where-Object { $_.CommandLine -like '*ReloadAgent.ps1*' } |
+                ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+        } catch { }
+        Write-Host 'Alter Agent (ReloadAgent) wurde entfernt.' -ForegroundColor Yellow
+    }
+    if (Test-Path $legacyDir) { Remove-Item $legacyDir -Recurse -Force -ErrorAction SilentlyContinue }
     if (-not (Test-Path $InstallDir)) { New-Item -ItemType Directory -Path $InstallDir | Out-Null }
     # Nur SYSTEM und Administratoren duerfen das Verzeichnis lesen (enthaelt das Token)
     $null = & icacls.exe $InstallDir /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' 2>&1
@@ -277,9 +290,9 @@ function Install-Agent {
         if ($resp.services) { $state['services'] = @($resp.services) }
         if ($resp.interval) { $state['interval'] = [int]$resp.interval }
         Save-State $state
-        Write-Host "Verbindung zu Reload Monitor erfolgreich (Status: $($resp.status))." -ForegroundColor Green
+        Write-Host "Verbindung zu Signalwarte erfolgreich (Status: $($resp.status))." -ForegroundColor Green
     } catch {
-        Write-Host "WARNUNG: Reload Monitor nicht erreichbar ($($_.Exception.Message)). Der Agent versucht es weiter." -ForegroundColor Yellow
+        Write-Host "WARNUNG: Signalwarte nicht erreichbar ($($_.Exception.Message)). Der Agent versucht es weiter." -ForegroundColor Yellow
     }
 
     $arg = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $InstalledScript + '" -Run'
@@ -294,14 +307,14 @@ function Install-Agent {
         -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) `
         -MultipleInstances IgnoreNew
     Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger @($boot, $watch) -Principal $principal `
-        -Settings $settings -Description 'Reload Monitor Agent: meldet Systemzustand an Reload Monitor' -Force | Out-Null
+        -Settings $settings -Description 'Signalwarte Agent: meldet Systemzustand an Signalwarte' -Force | Out-Null
     Start-ScheduledTask -TaskName $TaskName
     Write-Host "Installiert. Aufgabe '$TaskName' laeuft als SYSTEM." -ForegroundColor Green
     Write-Host "Verzeichnis: $InstallDir   (config.json, agent.log)"
 }
 
 function Uninstall-Agent {
-    Write-Host 'ReloadAgent wird entfernt ...' -ForegroundColor Cyan
+    Write-Host 'SignalwarteAgent wird entfernt ...' -ForegroundColor Cyan
     Stop-AgentProcesses
     try { Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue } catch { }
     Start-Sleep -Seconds 1

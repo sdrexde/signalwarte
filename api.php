@@ -616,7 +616,7 @@ try {
             $secrets = !empty($_GET['secrets']);
             log_event('user', 'Export ' . ($secrets ? 'mit' : 'ohne') . " Zugangsdaten von {$user['username']}");
             header('Content-Type: application/json; charset=utf-8');
-            header('Content-Disposition: attachment; filename="reload-monitor-export-' . date('Ymd-His') . '.json"');
+            header('Content-Disposition: attachment; filename="signalwarte-export-' . date('Ymd-His') . '.json"');
             header('Cache-Control: no-store');
             echo json_encode(export_all($secrets), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT);
             exit;
@@ -641,7 +641,7 @@ try {
             $db->exec('VACUUM INTO ' . $db->quote($tmp));
             log_event('user', "Datenbank-Download von {$user['username']}");
             header('Content-Type: application/vnd.sqlite3');
-            header('Content-Disposition: attachment; filename="reload-monitor-' . date('Ymd-His') . '.sqlite"');
+            header('Content-Disposition: attachment; filename="signalwarte-' . date('Ymd-His') . '.sqlite"');
             header('Content-Length: ' . filesize($tmp));
             header('Cache-Control: no-store');
             readfile($tmp);

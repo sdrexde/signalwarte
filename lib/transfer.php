@@ -44,7 +44,7 @@ function export_all(bool $withSecrets): array
         }
     }
     return [
-        'type' => 'reload-monitor-export', 'version' => 1, 'app_version' => APP_VERSION,
+        'type' => 'signalwarte-export', 'version' => 1, 'app_version' => APP_VERSION,
         'exported_at' => date('c'), 'with_secrets' => $withSecrets,
         'groups' => $db->query('SELECT id, parent_id, name, kind, sort, paused FROM groups ORDER BY id')->fetchAll(),
         'devices' => $devices, 'sensors' => $sensors, 'notifications' => $notifs, 'maps' => $maps,
@@ -60,8 +60,8 @@ function export_all(bool $withSecrets): array
  */
 function import_all(array $x, string $mode): array
 {
-    if (($x['type'] ?? '') !== 'reload-monitor-export') {
-        throw new InvalidArgumentException('Keine Reload-Monitor-Exportdatei');
+    if (!in_array($x['type'] ?? '', ['signalwarte-export', 'reload-monitor-export'], true)) {   // altes Format weiter lesbar
+        throw new InvalidArgumentException('Keine Signalwarte-Exportdatei');
     }
     $db = db();
     $stats = ['groups' => 0, 'devices' => 0, 'sensors' => 0, 'maps' => 0, 'notifications' => 0, 'icons' => 0, 'skipped' => 0];

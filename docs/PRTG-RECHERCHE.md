@@ -1,9 +1,9 @@
 # PRTG Network Monitor – Recherche (Aufbau, Konzepte, Maps)
 
-Grundlage für **Reload Monitor**. Zusammengestellt aus dem offiziellen PRTG-Handbuch von Paessler
+Grundlage für **Signalwarte**. Zusammengestellt aus dem offiziellen PRTG-Handbuch von Paessler
 (Stand November 2026). Die Screenshots unten sind **nicht** in diesem Repository gespeichert, sondern
 werden direkt aus dem öffentlichen Paessler-Handbuch eingebunden (Urheberrecht: Paessler GmbH).
-Eigene Screenshots von Reload Monitor liegen unter [`docs/screenshots/`](screenshots/).
+Eigene Screenshots von Signalwarte liegen unter [`docs/screenshots/`](screenshots/).
 
 Quellen:
 - Objekt-Hierarchie: <https://www.paessler.com/manuals/prtg/object_hierarchy>
@@ -96,7 +96,7 @@ Status **zweifarbig** (z. B. halb rot, halb gelb).
 
 ![PRTG farbige Verbindungslinien](https://manuals.paessler.com/map_colored_lines.png)
 
-### Schwächen des PRTG-Designers (Anlass für Reload Monitor)
+### Schwächen des PRTG-Designers (Anlass für Signalwarte)
 
 - Bedienung eher „Formular-basiert“, nicht wie ein modernes Diagramm-Werkzeug.
 - Keine freien Formen/Zonen mit Text wie in draw.io, kein Zoom/Pan, keine Wegpunkte bei Linien,
@@ -105,9 +105,9 @@ Status **zweifarbig** (z. B. halb rot, halb gelb).
 
 ---
 
-## 6. Umsetzung in Reload Monitor (Mapping PRTG → Reload Monitor)
+## 6. Umsetzung in Signalwarte (Mapping PRTG → Signalwarte)
 
-| PRTG | Reload Monitor | Status |
+| PRTG | Signalwarte | Status |
 |---|---|---|
 | Root → Probe → Gruppen → Geräte → Sensoren → Kanäle | identisch (lokale Probe, beliebig tiefe Gruppen, Kanäle als Zusatzwerte) | ✅ |
 | Status-Farben & Priorität (Down/Warning/Up/Paused/Unknown/Bestätigt) | identisch, inkl. „schlimmster Status vererbt sich nach oben“ | ✅ |

@@ -1495,7 +1495,7 @@
         case 'export-menu': { const m = btn.parentElement.querySelector('.me-menu'); m.hidden = !m.hidden; break; }
         case 'export-svg': this.download(this.name + '.svg', new Blob([this.exportSvg()], { type: 'image/svg+xml' })); break;
         case 'export-png': this.exportPng(); break;
-        case 'export-json': this.download(this.name + '.json', new Blob([JSON.stringify({ type: 'reload-monitor-map', version: 1, name: this.name, data: this.data }, null, 2)], { type: 'application/json' })); break;
+        case 'export-json': this.download(this.name + '.json', new Blob([JSON.stringify({ type: 'signalwarte-map', version: 1, name: this.name, data: this.data }, null, 2)], { type: 'application/json' })); break;
         case 'import-json': this.root.querySelector('.me-file').click(); break;
         case 'fullscreen': if (document.fullscreenElement) document.exitFullscreen(); else this.root.requestFullscreen && this.root.requestFullscreen(); break;
         case 'save': if (this.opts.onSave && !this.opts.readonly) Promise.resolve(this.opts.onSave(this.serialize())).then((ok) => { if (ok !== false) { this.dirty = false; this.render(); } }); break;
