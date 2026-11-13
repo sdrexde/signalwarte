@@ -97,7 +97,6 @@ if ($s['type'] === 'agent') {
     $msg = $issues ? implode(' · ', $issues) : implode(' · ', $info);
     $r = ['status' => $status, 'value' => $channels[$primary] ?? null, 'unit' => str_contains($primary, '%') ? '%' : '',
         'message' => mb_substr($msg, 0, 480), 'extra' => $channels];
-    $s['fail_count'] = $status === 'down' ? 1 : 0;
     sensor_store_result($s, $r, true);
     json_out(['ok' => true, 'status' => $status, 'services' => $watch, 'interval' => (int) $s['interval_s']]);
 }
@@ -108,7 +107,6 @@ $status = in_array($src['status'] ?? 'up', ['up', 'warning', 'down'], true) ? ($
 $value = isset($src['value']) && is_numeric($src['value']) ? (float) $src['value'] : null;
 $msg = mb_substr(trim((string) ($src['msg'] ?? '')), 0, 300) ?: 'Push empfangen';
 $r = ['status' => $status, 'value' => $value, 'unit' => (string) ($cfg['unit'] ?? ''), 'message' => $msg, 'extra' => []];
-// Gemeldete Fehler sind bewusst -> kein Retry, Grenzwerte trotzdem anwenden.
-$s['fail_count'] = $status === 'down' ? 1 : 0;
+// Gemeldete Fehler sind bewusst -> kein Retry (Push-Typen), Grenzwerte trotzdem anwenden.
 sensor_store_result($s, $r, true);
 json_out(['ok' => true]);

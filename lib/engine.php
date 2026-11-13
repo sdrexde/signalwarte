@@ -53,27 +53,41 @@ function sensor_row(int $id): ?array
     return $st->fetch() ?: null;
 }
 
+/** Anzahl aufeinanderfolgender Fehlprüfungen, bevor ein Sensor in den Alarm geht (Sensor-Wert oder global, Standard 3). */
+function sensor_fail_threshold(array $s): int
+{
+    $v = isset($s['retries']) && $s['retries'] !== null && $s['retries'] !== '' ? (int) $s['retries'] : (int) setting('fail_threshold', '3');
+    return max(1, min(10, $v));
+}
+
 /**
- * Persistiert ein Prüfergebnis inkl. Retry-Logik (erster Fehlschlag => Warnung, zweiter => Fehler)
- * und löst bei Statuswechsel Ereignis + Benachrichtigung aus.
+ * Persistiert ein Prüfergebnis inkl. Bestätigungs-Logik: Verschlechtert sich der Status (Warnung/Fehler),
+ * wird er erst nach N aufeinanderfolgenden schlechten Prüfungen übernommen (Standard 3). Bis dahin bleibt
+ * der bisherige Status stehen und es wird in kurzen Abständen erneut geprüft. Verbesserungen gelten sofort.
+ * Löst bei Statuswechsel Ereignis + Benachrichtigung aus.
  */
 function sensor_store_result(array $s, array $r, bool $fromLimits = true): void
 {
     $now = time();
-    $raw = $r['status'];
     if ($fromLimits) {
         $r = apply_limits($r, $s);
     }
     $fail = (int) $s['fail_count'];
     $next = $now + max(10, (int) $s['interval_s']);
+    $bad = in_array($r['status'], ['warning', 'down'], true);
+    $isPush = in_array($s['type'], PUSH_TYPES, true);   // Push/Agent melden bewusst – keine Wiederholung möglich
 
-    if ($raw === 'down') {
+    if ($bad) {
         $fail++;
-        // Wie bei PRTG: erster Fehlschlag => Warnung + schneller Neuversuch.
-        if ($fail === 1 && $s['status'] !== 'down' && !in_array($s['type'], PUSH_TYPES, true)) {
-            $r['status'] = 'warning';
-            $r['message'] = 'Neuer Versuch … ' . $r['message'];
-            $next = $now + min(20, max(10, (int) $s['interval_s']));
+        $threshold = $isPush ? 1 : sensor_fail_threshold($s);
+        $cur = $s['status'];
+        $worse = (STATUS_PRIO[$r['status']] ?? 0) > (STATUS_PRIO[$cur] ?? 0) || $cur === 'unknown';
+        if ($worse && $fail < $threshold) {
+            // noch kein Alarm: bisherigen Status halten, schnell erneut prüfen
+            $r['message'] = "Fehlprüfung {$fail}/{$threshold} – wird erneut geprüft … " . $r['message'];
+            $r['status'] = $cur;
+            $retry = max(5, (int) setting('retry_delay', '20'));
+            $next = $now + min($retry, max(10, (int) $s['interval_s']));
         }
     } else {
         $fail = 0;

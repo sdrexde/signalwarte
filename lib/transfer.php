@@ -2,7 +2,7 @@
 // Export / Import der Konfiguration (Gruppen, Geräte, Sensoren, Maps, Benachrichtigungen, Icons, Einstellungen).
 declare(strict_types=1);
 
-const EXPORT_SETTINGS = ['retention_days', 'poller_workers', 'scan_exclude', 'require_2fa', 'session_idle_min'];
+const EXPORT_SETTINGS = ['retention_days', 'poller_workers', 'scan_exclude', 'require_2fa', 'session_idle_min', 'fail_threshold', 'retry_delay'];
 
 function export_all(bool $withSecrets): array
 {
@@ -16,7 +16,7 @@ function export_all(bool $withSecrets): array
         $d['creds'] = $c;
     }
     unset($d);
-    $sensors = $db->query('SELECT id, device_id, name, type, config, interval_s, sort, paused, warn_max, err_max, warn_min, err_min, push_token FROM sensors ORDER BY id')->fetchAll();
+    $sensors = $db->query('SELECT id, device_id, name, type, config, interval_s, sort, paused, warn_max, err_max, warn_min, err_min, retries, push_token FROM sensors ORDER BY id')->fetchAll();
     foreach ($sensors as &$s) {
         $s['config'] = json_decode((string) $s['config'], true) ?: [];
         if (!$withSecrets) {
@@ -181,6 +181,9 @@ function import_all(array $x, string $mode): array
                     $s['warn_max'] ?? null, $s['err_max'] ?? null, $s['warn_min'] ?? null, $s['err_min'] ?? null, $tok, time(),
                     $tok ? time() + max(10, (int) ($s['interval_s'] ?? 60)) : 0]);
             $sMap[$s['id']] = (int) $db->lastInsertId();
+            if (isset($s['retries']) && $s['retries'] !== null) {
+                $db->prepare('UPDATE sensors SET retries = ? WHERE id = ?')->execute([max(1, min(10, (int) $s['retries'])), $sMap[$s['id']]]);
+            }
             $stats['sensors']++;
         }
         foreach ($depends as $dev => $oldSensor) {

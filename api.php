@@ -92,6 +92,7 @@ try {
                 'heartbeat' => (int) setting('poller_heartbeat', '0'), 'now' => time(),
                 'version' => APP_VERSION,
                 'icons' => $db->query('SELECT id, name, data FROM icons ORDER BY name')->fetchAll(),
+                'fail_threshold' => (int) setting('fail_threshold', '3'),
             ]);
 
         case 'tree':
@@ -190,6 +191,8 @@ try {
                 'require_2fa' => setting('require_2fa', '0') === '1',
                 'scan_exclude' => (string) setting('scan_exclude', ''),
                 'session_idle_min' => (int) setting('session_idle_min', '480'),
+                'fail_threshold' => (int) setting('fail_threshold', '3'),
+                'retry_delay' => (int) setting('retry_delay', '20'),
             ]]);
 
         /* ------------------------------------------------------- Schreiben */
@@ -304,11 +307,15 @@ try {
                 $cur = sensor_row($id) ?? json_err('Sensor nicht gefunden', 404);
                 $type = $cur['type'];
                 $cfg = sensor_normalize_config($type, (array) ($in['config'] ?? []));
-                $db->prepare('UPDATE sensors SET name = ?, config = ?, interval_s = ?, warn_max = ?, err_max = ?, warn_min = ?, err_min = ?, next_check = 0 WHERE id = ?')
+                $db->prepare('UPDATE sensors SET name = ?, config = ?, interval_s = ?, warn_max = ?, err_max = ?, warn_min = ?, err_min = ?, retries = ?, next_check = 0 WHERE id = ?')
                     ->execute([require_name(in_str($in, 'name')), json_encode($cfg, JSON_UNESCAPED_UNICODE),
-                        max(10, (int) ($in['interval_s'] ?? 60)), in_num($in, 'warn_max'), in_num($in, 'err_max'), in_num($in, 'warn_min'), in_num($in, 'err_min'), $id]);
+                        max(10, (int) ($in['interval_s'] ?? 60)), in_num($in, 'warn_max'), in_num($in, 'err_max'), in_num($in, 'warn_min'), in_num($in, 'err_min'),
+                        in_int($in, 'retries') !== null ? max(1, min(10, in_int($in, 'retries'))) : null, $id]);
             } else {
                 $id = create_sensor((int) $in['device_id'], $type, in_str($in, 'name'), (array) ($in['config'] ?? []), $in);
+                if (in_int($in, 'retries') !== null) {
+                    $db->prepare('UPDATE sensors SET retries = ? WHERE id = ?')->execute([max(1, min(10, in_int($in, 'retries'))), $id]);
+                }
             }
             json_out(['ok' => true, 'id' => $id]);
 
@@ -439,8 +446,16 @@ try {
             json_out(['ok' => true]);
 
         case 'settings_save':
-            setting_set('retention_days', (string) max(1, min(400, (int) ($in['retention_days'] ?? 30))));
-            setting_set('poller_workers', (string) max(1, min(32, (int) ($in['poller_workers'] ?? 8))));
+            if (isset($in['retention_days'])) {
+                setting_set('retention_days', (string) max(1, min(400, (int) $in['retention_days'])));
+            }
+            if (isset($in['poller_workers'])) {
+                setting_set('poller_workers', (string) max(1, min(32, (int) $in['poller_workers'])));
+            }
+            if (isset($in['fail_threshold'])) {
+                setting_set('fail_threshold', (string) max(1, min(10, (int) $in['fail_threshold'])));
+                setting_set('retry_delay', (string) max(5, min(300, (int) ($in['retry_delay'] ?? 20))));
+            }
             if (isset($in['session_idle_min'])) {
                 setting_set('session_idle_min', (string) max(5, min(10080, (int) $in['session_idle_min'])));
             }

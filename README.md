@@ -8,7 +8,7 @@ PHP 8 + SQLite + Vanilla JS, keine Build-Tools, kein Framework.
 ## Funktionen
 
 - **Objektbaum wie PRTG:** Root → Probe → Gruppen (beliebig tief) → Geräte → Sensoren → Kanäle
-- **Status-Logik wie PRTG:** Fehler / Warnung / bestätigt / unbekannt / OK / pausiert, schlimmster Status vererbt sich nach oben, Retry (1. Fehlschlag = Warnung, 2. = Fehler), Warn-/Fehlergrenzen, Abhängigkeiten (Master-Sensor), Alarme bestätigen, Pausieren
+- **Status-Logik wie PRTG:** Fehler / Warnung / bestätigt / unbekannt / OK / pausiert, schlimmster Status vererbt sich nach oben, Alarm erst nach N Fehlprüfungen in Folge (Standard 3, Nachprüfung alle 20 s, je Sensor einstellbar), Warn-/Fehlergrenzen, Abhängigkeiten (Master-Sensor), Alarme bestätigen, Pausieren
 - **Sensortypen:** Ping, HTTP(S) (Statuscode, Schlüsselwort), TCP-Port, DNS, SSL-Zertifikatslaufzeit, HTTP-JSON-Wert (beliebige API), HTTP-Push, **SNMP System** (CPU/RAM/Laufwerke/Laufzeit/pf-States), **SNMP Traffic** (Interface ein/aus, Auslastung, Link), **SNMP Wert (OID)**, **FRITZ!Box (TR-064)**, **Windows-Agent**, CPU / RAM / Speicherplatz der Probe
 - **Netzwerkscanner:** Netze (z. B. `192.168.1.0/24, 10.0.0.1-50`) scannen → Ping, ~30 Ports, Hostname, MAC/Hersteller, Web-Titel → Gerätetyp wird erkannt (FRITZ!Box, pfSense/OPNsense, Windows, DC, Linux, Proxmox, NAS, Drucker …) und Geräte mit passenden Sensoren per Klick übernommen
 - **Gerätevorlagen:** Windows-Server, Domänencontroller, Linux, pfSense (Web-Port frei wählbar, z. B. 4444), FRITZ!Box, FRITZ!Repeater, Switch, Proxmox, NAS, Drucker, Webseite

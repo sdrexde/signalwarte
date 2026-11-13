@@ -447,6 +447,10 @@
         <form class="card" id="sysForm"><h2>Datenhaltung & Leistung</h2>
           <label class="f"><span>Messwerte aufbewahren (Tage)</span><input type="number" name="retention_days" min="1" max="400" value="${j.settings.retention_days}"></label>
           <label class="f"><span>Parallele Prüf-Prozesse</span><input type="number" name="poller_workers" min="1" max="32" value="${j.settings.poller_workers}"></label>
+          <h3>Alarm-Verhalten</h3>
+          <div class="grid2"><label class="f"><span>Fehlprüfungen bis Alarm</span><input type="number" name="fail_threshold" min="1" max="10" value="${j.settings.fail_threshold}"></label>
+          <label class="f"><span>Erneute Prüfung nach (Sek.)</span><input type="number" name="retry_delay" min="5" max="300" value="${j.settings.retry_delay}"></label></div>
+          <p class="muted small">Ein Sensor geht erst in Warnung/Fehler, wenn so viele Prüfungen <b>hintereinander</b> fehlschlagen. Zwischendurch wird im kurzen Abstand nachgeprüft. Beispiel 3 / 20 s: Alarm ca. 40 s nach dem ersten Fehlschlag. Je Sensor abweichend einstellbar. Push-Sensoren und Windows-Agent melden sofort.</p>
           ${isAdmin() ? '<button class="btn primary">Speichern</button>' : ''}</form></div>
         <form class="card" id="secForm"><h2>🔐 Sicherheit</h2>
           <label class="check"><input type="checkbox" name="require_2fa"${j.settings.require_2fa ? ' checked' : ''}> Zwei-Faktor-Anmeldung (2FA) für <b>alle</b> Benutzer vorschreiben</label>
@@ -584,6 +588,7 @@
         <dl class="facts">
           <dt>Typ</dt><dd>${esc(def.label)}</dd>
           <dt>Intervall</dt><dd>${s.interval_s} s · zuletzt ${ago(s.last_check)}</dd>
+          ${['push', 'agent'].includes(s.type) ? '' : `<dt>Alarm nach</dt><dd>${s.retries || S.boot.fail_threshold || 3} Fehlprüfungen in Folge${+s.fail_count ? ` · aktuell ${s.fail_count} fehlgeschlagen` : ''}</dd>`}
           <dt>Verfügbarkeit 24 h</dt><dd>${uptime !== null ? uptime.toLocaleString('de-DE') + ' %' : '–'}</dd>
           <dt>Ø / Min / Max 24 h</dt><dd>${fmt(s.stats24 && s.stats24.avg !== null ? +s.stats24.avg : null)} / ${fmt(s.stats24 && s.stats24.min !== null ? +s.stats24.min : null)} / ${fmt(s.stats24 && s.stats24.max !== null ? +s.stats24.max : null)}</dd>
           ${lim ? `<dt>Grenzwerte</dt><dd>${lim}</dd>` : ''}
@@ -912,6 +917,7 @@
       ${type === 'agent' ? '<p class="muted small">Nach dem Speichern in den Sensor-Details den Agenten herunterladen und auf dem Windows-Server ausführen.</p>' : ''}
       ${['snmp_system', 'snmp_traffic', 'snmp_custom'].includes(type) ? '<p class="muted small">SNMP-Community/Version werden am Gerät hinterlegt (Gerät bearbeiten › Zugangsdaten). pfSense: Dienste › SNMP aktivieren, Module „MibII“, „Host Resources“, „pf“ anhaken, Firewall-Regel für UDP 161 vom Monitor erlauben.</p>' : ''}
       ${type === 'fritzbox' ? '<p class="muted small">FRITZ!Box: Heimnetz › Netzwerk › Netzwerkeinstellungen › „Zugriff für Anwendungen zulassen“ und „Statusinformationen über UPnP übertragen“ aktivieren. Für Modell, Laufzeit und Geräteanzahl Benutzer/Passwort am Gerät hinterlegen.</p>' : ''}
+      ${['push', 'agent'].includes(type) ? '' : `<label class="f"><span>Fehlprüfungen bis Alarm (leer = Standard aus Einstellungen)</span><input name="retries" type="number" min="1" max="10" value="${s && s.retries !== null && s.retries !== undefined ? s.retries : ''}" placeholder="Standard"></label>`}
       <fieldset class="limits"><legend>Grenzwerte (${esc(t.unit || 'Wert')}) – leer = aus</legend><div class="grid4">
         <label class="f"><span>Warnung über</span><input name="warn_max" type="number" step="any" value="${lim('warn_max')}"></label>
         <label class="f"><span>Fehler über</span><input name="err_max" type="number" step="any" value="${lim('err_max')}"></label>
@@ -921,6 +927,7 @@
     async (f) => {
       const data = { id, device_id: deviceId, type, name: f.name.value, interval_s: f.interval_s.value, config: readCfg(f, t.fields) };
       for (const k of ['warn_max', 'err_max', 'warn_min', 'err_min']) data[k] = f[k].value;
+      if (f.retries) data.retries = f.retries.value;
       const r = await api('sensor_save', data);
       toast('Sensor gespeichert');
       api('sensor_check', { id: r.id }).then(reload).catch(() => {});

@@ -173,4 +173,10 @@ function db_migrate_more(PDO $pdo, int $ver): void
         PRAGMA user_version = 4;
         SQL);
     }
+    if ($ver < 5) {
+        $pdo->exec(<<<SQL
+        ALTER TABLE sensors ADD COLUMN retries INTEGER;   -- Fehlprüfungen bis Alarm (NULL = global)
+        PRAGMA user_version = 5;
+        SQL);
+    }
 }
