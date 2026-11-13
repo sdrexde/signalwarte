@@ -15,6 +15,9 @@ PHP 8 + SQLite + Vanilla JS, keine Build-Tools, kein Framework.
 - **Auto-Discovery** für einzelne Hosts (gleiche Erkennung wie der Scanner)
 - **Weboberflächen per Klick öffnen:** HTTP(S)-Sensoren und Web-Ports haben ein ↗, Geräte einen „Öffnen“-Button (eigene URL hinterlegbar)
 - **Kanäle:** alle Zusatzwerte eines Sensors (z. B. Download/Upload, RAM %, Frei C: %) mit eigenem Verlauf; in Maps als Wert einer Status-Kachel wählbar
+- **DHCP-/Ausschlussbereiche:** z. B. `192.168.11.50-192.168.11.84` – werden beim Scan übersprungen; vorhandene Geräte in diesen Bereichen lassen sich gesammelt entfernen
+- **Datensicherung:** Export/Import der Konfiguration als JSON (Ergänzen oder Ersetzen, optional mit Zugangsdaten), Download der kompletten Datenbank
+- **Maps:** automatisch aus dem Inventar erzeugen (Zonen je Gruppe, Gateway/Firewall, Internet), **Hintergrundbild** (Grundriss/Netzplan) mit Deckkraft, Position, Größe
 - **Icons:** über 45 mitgelieferte Geräte-Icons + **eigene Icons hochladen** (SVG/PNG/JPG/WebP)
 - **Graphen** (1 h / 24 h / 7 T / 30 T) mit Grenzwert-Linien, Verfügbarkeit, Ø/Min/Max
 - **Benachrichtigungen:** E-Mail, Telegram, Webhook (JSON), ntfy-Push – je für Fehler / Warnung / wieder OK

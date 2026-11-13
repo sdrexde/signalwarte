@@ -62,6 +62,10 @@ function group_is_descendant(int $id, int $ancestor): bool
 
 $db = db();
 
+if (in_array($action, ['export', 'db_download'], true) && $user['role'] !== 'admin') {
+    json_err('Nur für Administratoren', 403);
+}
+
 // 2FA-Pflicht: bis zur Einrichtung nur Konto-Aktionen erlauben
 if (!empty($user['must_setup_2fa']) && !in_array($action, ['bootstrap', 'totp_setup', 'totp_enable', 'password'], true)) {
     json_err('Bitte zuerst die Zwei-Faktor-Anmeldung einrichten (Mein Konto).', 403);
@@ -184,6 +188,7 @@ try {
                 'retention_days' => (int) setting('retention_days', '30'),
                 'poller_workers' => (int) setting('poller_workers', '8'),
                 'require_2fa' => setting('require_2fa', '0') === '1',
+                'scan_exclude' => (string) setting('scan_exclude', ''),
                 'session_idle_min' => (int) setting('session_idle_min', '480'),
             ]]);
 
@@ -345,8 +350,8 @@ try {
             $id = in_int($in, 'id');
             $name = require_name(in_str($in, 'name'));
             $data = json_encode($in['data'] ?? ['nodes' => [], 'edges' => []], JSON_UNESCAPED_UNICODE);
-            if (strlen($data) > 4_000_000) {
-                json_err('Map zu groß (max. 4 MB)');
+            if (strlen($data) > 12_000_000) {
+                json_err('Map zu groß (max. 12 MB inkl. Hintergrundbild)');
             }
             $refresh = max(5, min(3600, (int) ($in['refresh_s'] ?? 30)));
             if ($id) {
@@ -439,6 +444,12 @@ try {
             if (isset($in['session_idle_min'])) {
                 setting_set('session_idle_min', (string) max(5, min(10080, (int) $in['session_idle_min'])));
             }
+            if (isset($in['scan_exclude'])) {
+                require_once __DIR__ . '/lib/scanner.php';
+                $ex = trim((string) $in['scan_exclude']);
+                scan_parse_ranges($ex);   // wirft bei Fehlern
+                setting_set('scan_exclude', mb_substr($ex, 0, 4000));
+            }
             if (isset($in['require_2fa'])) {
                 $req = filter_var($in['require_2fa'], FILTER_VALIDATE_BOOLEAN);
                 if ($req && !$user['totp_enabled']) {
@@ -466,12 +477,22 @@ try {
             @set_time_limit(300);
             session_write_close();
             $targets = scan_parse_targets((string) ($in['targets'] ?? ''));
+            $skipped = 0;
+            if (empty($in['include_excluded'])) {
+                $ranges = scan_parse_ranges((string) setting('scan_exclude', ''));
+                $before = count($targets);
+                $targets = array_values(array_filter($targets, fn($ip) => !ip_in_ranges($ip, $ranges)));
+                $skipped = $before - count($targets);
+            }
+            if (!$targets) {
+                json_out(['ok' => true, 'hosts' => [], 'scanned' => 0, 'skipped' => $skipped]);
+            }
             $existing = array_column($db->query("SELECT host, name FROM devices WHERE host != ''")->fetchAll(), 'name', 'host');
             $res = scan_network($targets, (array) ($in['creds'] ?? []), !empty($in['deep']));
             foreach ($res as &$r) {
                 $r['exists'] = $existing[$r['ip']] ?? ($r['hostname'] !== '' ? ($existing[$r['hostname']] ?? null) : null);
             }
-            json_out(['ok' => true, 'hosts' => $res, 'scanned' => count($targets)]);
+            json_out(['ok' => true, 'hosts' => $res, 'scanned' => count($targets), 'skipped' => $skipped]);
 
         case 'icon_save':
             $data = (string) ($in['data'] ?? '');
@@ -554,6 +575,63 @@ try {
             $db->prepare('UPDATE users SET totp_secret = NULL, totp_enabled = 0, totp_last = NULL, recovery_codes = NULL WHERE id = ?')->execute([$id]);
             log_event('user', "2FA zurückgesetzt für Benutzer #{$id} von {$user['username']}");
             json_out(['ok' => true]);
+
+        case 'excluded_devices':
+            require_once __DIR__ . '/lib/scanner.php';
+            $ranges = scan_parse_ranges((string) setting('scan_exclude', ''));
+            $out = [];
+            foreach ($db->query('SELECT id, name, host FROM devices') as $d) {
+                if (filter_var($d['host'], FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) && ip_in_ranges($d['host'], $ranges)) {
+                    $out[] = $d;
+                }
+            }
+            json_out(['ok' => true, 'devices' => $out]);
+
+        case 'devices_delete':
+            $ids = array_map('intval', (array) ($in['ids'] ?? []));
+            $st = $db->prepare('DELETE FROM devices WHERE id = ?');
+            foreach ($ids as $i) {
+                $st->execute([$i]);
+            }
+            log_event('user', count($ids) . " Geräte gelöscht von {$user['username']}");
+            json_out(['ok' => true, 'deleted' => count($ids)]);
+
+        case 'export':
+            require_once __DIR__ . '/lib/transfer.php';
+            $secrets = !empty($_GET['secrets']);
+            log_event('user', 'Export ' . ($secrets ? 'mit' : 'ohne') . " Zugangsdaten von {$user['username']}");
+            header('Content-Type: application/json; charset=utf-8');
+            header('Content-Disposition: attachment; filename="reload-monitor-export-' . date('Ymd-His') . '.json"');
+            header('Cache-Control: no-store');
+            echo json_encode(export_all($secrets), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT);
+            exit;
+
+        case 'import':
+            require_once __DIR__ . '/lib/transfer.php';
+            if (!is_array($in['data'] ?? null)) {
+                json_err('Keine Daten');
+            }
+            $mode = ($in['mode'] ?? 'merge') === 'replace' ? 'replace' : 'merge';
+            if ($mode === 'replace' && ($in['confirm'] ?? '') !== 'ERSETZEN') {
+                json_err('Zum Ersetzen bitte ERSETZEN bestätigen');
+            }
+            $stats = import_all($in['data'], $mode);
+            log_event('user', "Import ({$mode}) von {$user['username']}: " . json_encode($stats));
+            json_out(['ok' => true, 'stats' => $stats]);
+
+        case 'db_download':
+            // vollständige Datenbank inkl. Messwerte und Benutzer (konsistent per VACUUM INTO)
+            $tmp = tempnam(sys_get_temp_dir(), 'rmdb');
+            unlink($tmp);
+            $db->exec('VACUUM INTO ' . $db->quote($tmp));
+            log_event('user', "Datenbank-Download von {$user['username']}");
+            header('Content-Type: application/vnd.sqlite3');
+            header('Content-Disposition: attachment; filename="reload-monitor-' . date('Ymd-His') . '.sqlite"');
+            header('Content-Length: ' . filesize($tmp));
+            header('Cache-Control: no-store');
+            readfile($tmp);
+            unlink($tmp);
+            exit;
 
         default:
             json_err('Unbekannte Aktion', 404);

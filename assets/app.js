@@ -317,7 +317,7 @@
     el.innerHTML = '<div class="page"><div class="pagehead"><h1>Maps</h1></div><p class="muted">Lade …</p></div>';
     const j = await api('maps').catch(fail);
     if (!j || S.view !== 'maps') return;
-    el.innerHTML = `<div class="page"><div class="pagehead"><h1>Maps</h1><div class="actions">${isAdmin() ? '<button class="btn primary" data-act="new-map">+ Neue Map</button>' : ''}</div></div>
+    el.innerHTML = `<div class="page"><div class="pagehead"><h1>Maps</h1><div class="actions">${isAdmin() ? '<button class="btn" data-act="auto-map">✨ Map automatisch erstellen</button><button class="btn primary" data-act="new-map">+ Neue Map</button>' : ''}</div></div>
       <p class="muted">Maps sind frei gestaltbare Netzwerkpläne mit Live-Status – Editor wie draw.io: Formen und Geräte per Drag & Drop, Verbindungen über die blauen ×-Punkte ziehen.</p>
       <div class="mapgrid">${j.maps.map((m) => `<a class="card mapcard" href="#/maps/${m.id}">
         <div class="mapthumb" data-thumb="${m.id}"></div>
@@ -412,7 +412,7 @@
 
   /* ===================================================== Einstellungen */
   async function viewSettings(el, sub) {
-    const tabs = [['notifications', 'Benachrichtigungen'], ['users', 'Benutzer'], ['icons', 'Icons'], ['system', 'System'], ['account', 'Mein Konto']];
+    const tabs = [['notifications', 'Benachrichtigungen'], ['users', 'Benutzer'], ['icons', 'Icons'], ['backup', 'Datensicherung'], ['system', 'System'], ['account', 'Mein Konto']];
     el.innerHTML = `<div class="page"><div class="pagehead"><h1>Einstellungen</h1></div>
       <div class="subtabs">${tabs.map(([k, l]) => `<a href="#/settings/${k}" class="${sub === k ? 'on' : ''}">${l}</a>`).join('')}</div><div id="setBox"></div></div>`;
     const box = $('#setBox');
@@ -464,6 +464,40 @@
         ev.preventDefault();
         const fd = Object.fromEntries(new FormData(ev.target));
         try { await api('settings_save', fd); toast('Gespeichert'); } catch (e) { fail(e); }
+      });
+    } else if (sub === 'backup') {
+      if (!isAdmin()) { box.innerHTML = '<div class="card"><p class="muted">Nur für Administratoren.</p></div>'; return; }
+      box.innerHTML = `<div class="cols2"><div class="card"><h2>⤓ Export</h2>
+          <p class="muted">Konfiguration als JSON: Gruppen, Geräte, Sensoren, Maps (inkl. Hintergrundbilder), Benachrichtigungen, eigene Icons, Einstellungen. Ohne Messwerte und Benutzer.</p>
+          <label class="check"><input type="checkbox" id="expSecrets"> inkl. Zugangsdaten (SNMP-Community, Passwörter, Push-/Agent-Tokens)</label>
+          <p class="muted small">Ohne Zugangsdaten bekommen Push-Sensoren und Windows-Agenten beim Import neue Tokens.</p>
+          <div class="row wrap"><button class="btn primary" data-act="export">JSON exportieren</button></div>
+          <h3>Komplette Datenbank</h3><p class="muted small">SQLite-Datei mit allem (inkl. Messwerte, Benutzer, 2FA). Für Umzug: <code>install/install.sh --import datei.sqlite</code>.</p>
+          <button class="btn" data-act="db-download">Datenbank herunterladen (.sqlite)</button></div>
+        <form class="card" id="impForm"><h2>⤒ Import</h2>
+          <label class="f"><span>Exportdatei (.json)</span><input type="file" name="file" accept=".json,application/json" required></label>
+          <div class="f"><span>Modus</span>
+            <label class="check"><input type="radio" name="mode" value="merge" checked> Ergänzen – vorhandene Geräte (gleicher Name + Host) werden übersprungen</label>
+            <label class="check"><input type="radio" name="mode" value="replace"> Ersetzen – alle Gruppen, Geräte, Sensoren, Messwerte, Maps, Benachrichtigungen und Icons werden gelöscht</label></div>
+          <button class="btn primary">Importieren</button><div id="impRes"></div></form></div>`;
+      $('#impForm').addEventListener('submit', async (ev) => {
+        ev.preventDefault();
+        const fm = ev.target;
+        let data;
+        try { data = JSON.parse(await fm.file.files[0].text()); } catch (e) { toast('Datei ist kein gültiges JSON', 'err'); return; }
+        const mode = fm.mode.value;
+        let confirmTxt = '';
+        if (mode === 'replace') {
+          confirmTxt = prompt('ACHTUNG: Alle bestehenden Geräte, Sensoren, Messwerte und Maps werden gelöscht.\nZum Bestätigen ERSETZEN eingeben:') || '';
+          if (confirmTxt !== 'ERSETZEN') { toast('Abgebrochen'); return; }
+        }
+        try {
+          const r = await api('import', { data, mode, confirm: confirmTxt });
+          const st = r.stats;
+          $('#impRes').innerHTML = `<p class="alert ok">✔ Importiert: ${st.groups} Gruppen, ${st.devices} Geräte, ${st.sensors} Sensoren, ${st.maps} Maps, ${st.notifications} Benachrichtigungen, ${st.icons} Icons${st.skipped ? ` · ${st.skipped} Geräte übersprungen (schon vorhanden)` : ''}</p>`;
+          S.boot = await api('bootstrap'); RM_ICONS.registerCustom(S.boot.icons);
+          await loadTree();
+        } catch (e) { fail(e); }
       });
     } else if (sub === 'icons') {
       const builtin = Object.entries(RM_ICONS.icons);
@@ -769,12 +803,38 @@
         <label class="f"><span>Neue Geräte in Gruppe</span><select name="group_id">${allGroups().map((x) => opt(x.id, x.name, 2)).join('')}</select></label></div>
         <div class="grid2"><label class="f"><span>SNMP-Community für neue Geräte (optional)</span><input name="community" placeholder="z. B. public"></label>
         <div class="f"><span>Optionen</span><label class="check"><input type="checkbox" name="deep"> Gründlich: auch Geräte ohne Ping-Antwort (Windows-Firewall), langsamer</label>
-        <label class="check"><input type="checkbox" name="optional"> Optionale Sensoren (SNMP / Windows-Agent) mit anlegen</label></div></div>
+        <label class="check"><input type="checkbox" name="optional"> Optionale Sensoren (SNMP / Windows-Agent) mit anlegen</label>
+        <label class="check"><input type="checkbox" name="include_excluded"> DHCP-/Ausschlussbereiche diesmal mit scannen</label></div></div>
+        <details class="credbox" id="exclBox"><summary>DHCP-Bereiche / Ausschlüsse – kommen nicht ins Inventar</summary>
+          <p class="muted small">Eine Zeile pro Bereich, z. B. <code>192.168.11.50-192.168.11.84</code>, <code>192.168.14.100-199</code> oder <code>10.0.5.0/24</code>. Mit <code>#</code> kommentieren.</p>
+          <textarea name="exclude" rows="4" placeholder="# DHCP Hausnetz&#10;192.168.11.50-192.168.11.84"></textarea>
+          <div class="row wrap"><button type="button" class="btn" id="exclSave">Ausschlüsse speichern</button><button type="button" class="btn" id="exclCheck">Vorhandene Geräte in diesen Bereichen anzeigen</button><span id="exclState" class="muted small"></span></div>
+          <div id="exclList"></div></details>
         <button class="btn primary" id="scanBtn">Scan starten</button> <span id="scanState" class="muted"></span></form>
       <div id="scanRes"></div>
       <div class="mfoot"><button type="button" class="btn" data-act="close-modal">Schließen</button><button type="button" class="btn primary" id="scanAdd" hidden>Ausgewählte hinzufügen</button></div></div>`, null, { wide: true, xwide: true });
     let hosts = [];
     const f = $('#scanForm', m);
+    api('settings').then((j) => { f.exclude.value = j.settings.scan_exclude || ''; if (j.settings.scan_exclude) $('#exclState', m).textContent = 'Ausschlüsse aktiv'; }).catch(() => {});
+    $('#exclSave', m).addEventListener('click', async () => {
+      try { await api('settings_save', { scan_exclude: f.exclude.value }); $('#exclState', m).textContent = '✔ gespeichert'; } catch (e) { fail(e); }
+    });
+    $('#exclCheck', m).addEventListener('click', async () => {
+      try {
+        await api('settings_save', { scan_exclude: f.exclude.value });
+        const j = await api('excluded_devices');
+        const list = $('#exclList', m);
+        if (!j.devices.length) { list.innerHTML = '<p class="muted small">Keine vorhandenen Geräte in diesen Bereichen.</p>'; return; }
+        j.devices.sort((a, b) => (ipNum(a.host) || 0) - (ipNum(b.host) || 0));
+        list.innerHTML = `<p class="small">${j.devices.length} Gerät(e) liegen in Ausschlussbereichen:</p><div class="excl">${j.devices.map((d) => `<label class="check"><input type="checkbox" class="exd" value="${d.id}" checked> ${esc(d.host)} – ${esc(d.name)}</label>`).join('')}</div>
+          <button type="button" class="btn danger" id="exclDel">Ausgewählte aus dem Inventar löschen</button>`;
+        $('#exclDel', m).addEventListener('click', async () => {
+          const ids = $$('.exd:checked', m).map((x) => +x.value);
+          if (!ids.length || !confirm(`${ids.length} Gerät(e) inkl. Sensoren und Messwerten löschen?`)) return;
+          try { const r = await api('devices_delete', { ids }); toast(`${r.deleted} Gerät(e) gelöscht`); list.innerHTML = ''; await reload(); } catch (e) { fail(e); }
+        });
+      } catch (e) { fail(e); }
+    });
     const upd = () => {
       const n = $$('#scanRes input.pick:checked', m).length;
       const b = $('#scanAdd', m);
@@ -787,9 +847,10 @@
       const t0 = Date.now();
       const tick = setInterval(() => { $('#scanState', m).textContent = `⏳ Scanne … ${Math.round((Date.now() - t0) / 1000)} s`; }, 500);
       try {
-        const j = await api('scan', { targets: f.targets.value, deep: f.deep.checked });
+        if (f.exclude.value.trim()) await api('settings_save', { scan_exclude: f.exclude.value });
+        const j = await api('scan', { targets: f.targets.value, deep: f.deep.checked, include_excluded: f.include_excluded.checked });
         hosts = j.hosts;
-        $('#scanState', m).textContent = `${hosts.length} Gerät(e) gefunden von ${j.scanned} Adressen (${Math.round((Date.now() - t0) / 1000)} s)`;
+        $('#scanState', m).textContent = `${hosts.length} Gerät(e) gefunden von ${j.scanned} Adressen (${Math.round((Date.now() - t0) / 1000)} s)${j.skipped ? ` · ${j.skipped} Adressen in DHCP-/Ausschlussbereichen übersprungen` : ''}`;
         $('#scanRes', m).innerHTML = hosts.length ? `<div class="scanwrap"><table class="tbl scantbl"><thead><tr><th><input type="checkbox" id="pickAll"></th><th>Name</th><th>Adresse</th><th>Typ</th><th>Hersteller / MAC</th><th>Dienste</th><th></th></tr></thead><tbody>
           ${hosts.map((h, i) => `<tr class="${h.exists ? 'exists' : ''}"><td><input type="checkbox" class="pick" data-i="${i}"${h.exists ? '' : ' checked'}></td>
             <td><input class="hname" data-i="${i}" value="${esc(h.name)}">${h.exists ? `<div class="sub">bereits vorhanden: ${esc(h.exists)}</div>` : ''}</td>
@@ -914,6 +975,110 @@
 
   async function reload() { await loadTree(); route(true); }
 
+  /* ------------------------------------------------- Auto-Map aus Inventar */
+  function autoMapDialog() {
+    const groups = flatGroups(S.tree).filter((g) => { const r = findGroup(g.id); return r && r.g.devices.length; });
+    modal(`<form><h2>✨ Map automatisch erstellen</h2>
+      <p class="muted">Erzeugt aus dem Inventar einen Netzplan: je Gruppe eine Zone mit Netzadresse, Gateway/Firewall oben, Geräte nach IP sortiert, Internet und Firewall verbunden. Alles mit Live-Status – danach frei im Editor anpassbar.</p>
+      <label class="f"><span>Name</span><input name="name" value="Netzplan (automatisch)" required></label>
+      <div class="f"><span>Gruppen</span><div class="disclist">${groups.map((g) => `<label class="check"><input type="checkbox" name="g" value="${g.id}" checked> ${esc(g.name)} <small class="muted">(${findGroup(g.id).g.devices.length} Geräte)</small></label>`).join('')}</div></div>
+      <div class="f"><span>Optionen</span>
+        <label class="check"><input type="checkbox" name="edges" checked> Geräte mit Gateway der Zone verbinden (bis 14 Geräte je Zone)</label>
+        <label class="check"><input type="checkbox" name="ip" checked> IP-Adresse unter dem Namen anzeigen</label></div>
+      <div class="mfoot"><button type="button" class="btn" data-act="close-modal">Abbrechen</button><button class="btn primary">Erstellen & öffnen</button></div></form>`,
+    async (f) => {
+      const ids = $$('input[name=g]:checked', f).map((x) => +x.value);
+      if (!ids.length) { toast('Mindestens eine Gruppe wählen', 'err'); return false; }
+      const data = buildAutoMap(ids, { edges: f.edges.checked, ip: f.ip.checked });
+      const r = await api('map_save', { name: f.name.value, data, refresh_s: 30 });
+      toast('Map erstellt');
+      location.hash = '#/maps/' + r.id + '?edit=1';
+    });
+  }
+
+  const GW_ICONS = ['firewall', 'router', 'fritzbox', 'modem'];
+  function subnetOf(devs) {
+    const ips = devs.map((d) => d.host).filter((h) => ipNum(h) !== null);
+    if (!ips.length) return '';
+    const p = ips.map((h) => h.split('.').slice(0, 3).join('.'));
+    const top = Object.entries(p.reduce((a, x) => { a[x] = (a[x] || 0) + 1; return a; }, {})).sort((a, b) => b[1] - a[1])[0][0];
+    return top + '.0/24';
+  }
+  function buildAutoMap(groupIds, opt) {
+    const nodes = [], edges = [];
+    const uid = (p) => p + Math.random().toString(36).slice(2, 9);
+    const iconStyle = { fill: '#ffffff', stroke: '#334155', strokeWidth: 0, fontSize: 11, fontColor: '#1f2937', bold: true, labelPos: 'bottom', iconColor: '#1e5fa8' };
+    const edgeStyle = (extra) => Object.assign({ stroke: '#94a3b8', width: 1.5, dash: false, routing: 'orthogonal', arrowEnd: false, arrowStart: false, animated: false, autoStatus: true, fontSize: 11 }, extra || {});
+    const colors = ['#0f6fc5', '#7c3aed', '#059669', '#d97706', '#db2777', '#0891b2', '#4f46e5', '#65a30d'];
+    const CW = 128, CH = 122, PAD = 30, TOP = 64, MAXW = 1900;
+    const zones = [];
+    let fw = null;
+    groupIds.forEach((gid, gi) => {
+      const g = findGroup(gid).g;
+      const devs = sortDevices(g.devices);
+      const isGw = (d) => GW_ICONS.includes(d.icon) || /pfsense|opnsense|firewall|fritz|router|gateway/i.test(d.name);
+      let gw = devs.find((d) => d.icon === 'firewall') || devs.find(isGw) || devs.find((d) => /\.(1|250|254)$/.test(d.host || ''));
+      const rest = devs.filter((d) => d !== gw);
+      const cols = Math.max(1, Math.min(7, Math.ceil(Math.sqrt(rest.length * 1.8))));
+      const rows = Math.ceil(rest.length / cols);
+      const w = Math.max(cols, 2) * CW + PAD * 2;
+      const h = TOP + (gw ? CH + 10 : 0) + rows * CH + PAD;
+      zones.push({ g, gw, rest, cols, w, h, color: colors[gi % colors.length] });
+    });
+    // Zonen zeilenweise anordnen
+    let x = 40, y = 260, rowH = 0;
+    for (const z of zones) {
+      if (x + z.w > MAXW && x > 40) { x = 40; y += rowH + 50; rowH = 0; }
+      z.x = x; z.y = y; x += z.w + 40; rowH = Math.max(rowH, z.h);
+    }
+    const label = (d) => d.name + (opt.ip && d.host && !d.name.includes(d.host) ? '\n' + d.host : '');
+    const devNode = (d, nx, ny) => {
+      const n = { id: uid('n'), kind: 'icon', shape: 'rect', icon: d.icon, x: nx, y: ny, w: 56, h: 56, label: label(d), bind: { type: 'device', id: d.id }, style: Object.assign({}, iconStyle) };
+      nodes.push(n);
+      return n;
+    };
+    const zoneNodes = [];
+    for (const z of zones) {
+      const net = subnetOf(z.g.devices);
+      const zn = { id: uid('z'), kind: 'zone', shape: 'rect', x: z.x, y: z.y, w: z.w, h: z.h, label: z.g.name + (net && !z.g.name.includes(net.slice(0, -3)) ? '  ·  ' + net : ''),
+        bind: { type: 'group', id: z.g.id }, style: { fill: z.color, fillOpacity: 0.05, stroke: z.color, strokeWidth: 1.5, dash: true, fontSize: 14, fontColor: z.color, bold: true, radius: 12 } };
+      nodes.unshift(zn);
+      zoneNodes.push(zn);
+      let gwNode = null;
+      if (z.gw) {
+        gwNode = devNode(z.gw, z.x + z.w / 2 - 28, z.y + TOP - 10);
+        if (z.gw.icon === 'firewall' && !fw) fw = gwNode;
+      }
+      const top = z.y + TOP + (z.gw ? CH + 10 : 0);
+      z.rest.forEach((d, i) => {
+        const c = i % z.cols, r = Math.floor(i / z.cols);
+        const n = devNode(d, z.x + PAD + c * CW + (CW - 56) / 2, top + r * CH);
+        if (gwNode && opt.edges && z.rest.length <= 14) edges.push({ id: uid('e'), from: { node: gwNode.id, port: 's' }, to: { node: n.id, port: 'n' }, style: edgeStyle() });
+      });
+      z.gwNode = gwNode;
+    }
+    // Internet + Firewall oben
+    const total = Math.max(...zones.map((z) => z.x + z.w)) || 800;
+    const inet = { id: uid('n'), kind: 'icon', shape: 'rect', icon: 'internet', x: total / 2 - 32, y: 20, w: 64, h: 64, label: 'Internet', style: Object.assign({}, iconStyle, { fontSize: 13 }) };
+    nodes.push(inet);
+    if (!fw) {
+      const f = []; walk((t, o) => { if (t === 'device' && o.icon === 'firewall') f.push(o); });
+      if (f[0]) { fw = devNode(f[0], total / 2 - 28, 150); }
+    }
+    if (fw && fw.y > 200) {
+      // Firewall sitzt in einer Zone: zusätzlich zentral darstellen ist nicht nötig – Verbindung Internet → Firewall
+    }
+    if (fw) edges.push({ id: uid('e'), from: { node: inet.id, port: 's' }, to: { node: fw.id, port: null }, style: edgeStyle({ stroke: '#0f6fc5', width: 3, animated: true, routing: 'straight' }) });
+    for (const z of zones) {
+      const target = z.gwNode || zoneNodes[zones.indexOf(z)];
+      if (fw && target === fw) continue;
+      if (fw) edges.push({ id: uid('e'), from: { node: fw.id, port: null }, to: { node: (z.gwNode || zoneNodes[zones.indexOf(z)]).id, port: null }, style: edgeStyle({ stroke: '#64748b', width: 2 }) });
+      else edges.push({ id: uid('e'), from: { node: inet.id, port: null }, to: { node: target.id, port: null }, style: edgeStyle({ stroke: '#64748b', width: 2 }) });
+    }
+    nodes.push({ id: uid('t'), kind: 'text', shape: 'rect', x: 40, y: 20, w: 420, h: 34, label: 'Netzplan', style: { fill: 'none', stroke: 'none', strokeWidth: 0, fontSize: 22, fontColor: '#0f172a', bold: true, labelPos: 'center' } });
+    return { nodes, edges, settings: { grid: true, snap: true, gridSize: 10, background: '#ffffff', guides: true } };
+  }
+
   function loadScript(src) {
     return new Promise((res, rej) => {
       if (document.querySelector(`script[src="${src}"]`)) { res(); return; }
@@ -994,6 +1159,9 @@
         case 'close-modal': closeModal(); break;
         case 'close-modal-go': closeModal(); location.hash = a.getAttribute('href'); break;
         case 'scan': scanDialog(); break;
+        case 'export': location.href = 'api.php?action=export' + ($('#expSecrets').checked ? '&secrets=1' : ''); break;
+        case 'db-download': location.href = 'api.php?action=db_download'; break;
+        case 'auto-map': autoMapDialog(); break;
         case 'tfa-setup': await tfaSetup(); break;
         case 'tfa-off': {
           const pw = prompt('Zum Deaktivieren: aktuelles Passwort');

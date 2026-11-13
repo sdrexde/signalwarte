@@ -419,3 +419,9 @@ kbd { font-size: 10.5px; border: 1px solid var(--line2); border-bottom-width: 2p
 .recovery code { font-size: 16px; padding: 8px; text-align: center; background: var(--hover); border: 1px solid var(--line); border-radius: 6px; letter-spacing: .05em; }
 .auth-form input[name=code] { font-size: 20px; letter-spacing: .2em; text-align: center; }
 .sortsel { padding: 6px 8px; font-size: 13px; }
+.me-filebtn { display: block; text-align: center; cursor: pointer; }
+.me-bgthumb { width: 100%; max-height: 120px; object-fit: contain; border: 1px solid var(--line); border-radius: 6px; margin-bottom: 8px; background: repeating-conic-gradient(#eee 0 25%, #fff 0 50%) 50% / 16px 16px; }
+.me-wide.on { border-color: #f59e0b; background: rgba(245, 158, 11, .12); }
+.excl { max-height: 180px; overflow-y: auto; border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; margin: 6px 0; display: flex; flex-direction: column; gap: 3px; }
+.alert.ok { background: #e7f6ec; color: #1b5e2f; border-color: #b9e3c6; }
+#exclBox textarea { width: 100%; font-family: ui-monospace, monospace; font-size: 12.5px; }

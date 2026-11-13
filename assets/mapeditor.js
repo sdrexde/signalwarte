@@ -283,7 +283,7 @@
       this.root.querySelectorAll('[data-cmd="snap"]').forEach((b) => b.classList.toggle('on', !!s.snap));
       const sm = this.root.querySelector('[data-cmd="save"]');
       if (sm) sm.classList.toggle('dirty', this.dirty);
-      this.emptyHint.hidden = this.data.nodes.length > 0;
+      this.emptyHint.hidden = this.data.nodes.length > 0 || !!(s.bg && s.bg.src);
 
       this.content.innerHTML = this.contentSvg();
       this.renderOverlay();
@@ -294,6 +294,11 @@
       // Zonen zuerst (immer hinten), dann Kanten, dann Knoten, Kantenbeschriftungen ganz oben
       let out = '';
       this._labels = [];
+      const bg = this.data.settings.bg;
+      if (bg && bg.src) {
+        out += `<image class="me-bgimg" href="${esc(bg.src)}" x="${bg.x || 0}" y="${bg.y || 0}" width="${bg.w}" height="${bg.h}" opacity="${bg.opacity ?? 1}" preserveAspectRatio="none" pointer-events="none"/>`;
+        if (this.bgMove && this.mode === 'edit') out += `<rect x="${bg.x || 0}" y="${bg.y || 0}" width="${bg.w}" height="${bg.h}" fill="none" stroke="#f59e0b" stroke-width="${2 / this.view.k}" stroke-dasharray="${8 / this.view.k} ${5 / this.view.k}" pointer-events="none"/>`;
+      }
       for (const n of this.data.nodes) if (n.kind === 'zone') out += this.nodeSvg(n);
       for (const e of this.data.edges) out += this.edgeSvg(e);
       for (const n of this.data.nodes) if (n.kind !== 'zone') out += this.nodeSvg(n);
@@ -735,6 +740,21 @@
         h += `<div class="me-grid2">${f('Raster', `<input type="checkbox" data-p="settings.grid"${s.grid ? ' checked' : ''}>`)}${f('Einrasten', `<input type="checkbox" data-p="settings.snap"${s.snap ? ' checked' : ''}>`)}</div>`;
         h += `<div class="me-grid2">${f('Rastergröße', `<input type="number" data-p="settings.gridSize" value="${s.gridSize}" min="2" max="100">`)}${f('Hilfslinien', `<input type="checkbox" data-p="settings.guides"${s.guides ? ' checked' : ''}>`)}</div>`;
         h += f('Aktualisierung Live-Ansicht (Sek.)', `<input type="number" data-p="refresh" value="${this.refresh}" min="5" max="3600">`);
+        const bg = s.bg;
+        h += '<h4>Hintergrundbild</h4>';
+        if (!bg || !bg.src) {
+          h += '<p class="me-hint">Grundriss, Netzplan, Lageplan oder Logo (PNG, JPG, SVG, WebP). Große Bilder werden automatisch verkleinert.</p>';
+          h += '<label class="me-wide me-filebtn">🖼️ Bild auswählen …<input type="file" accept="image/*" data-bgfile hidden></label>';
+        } else {
+          h += `<img class="me-bgthumb" src="${esc(bg.src)}" alt="">`;
+          h += f('Deckkraft', `<input type="range" min="0.05" max="1" step="0.05" data-p="bg.opacity" value="${bg.opacity ?? 1}">`);
+          h += `<div class="me-grid4">${f('X', `<input type="number" data-p="bg.x" value="${Math.round(bg.x || 0)}">`)}${f('Y', `<input type="number" data-p="bg.y" value="${Math.round(bg.y || 0)}">`)}${f('B', `<input type="number" data-p="bg.w" value="${Math.round(bg.w)}" min="10">`)}${f('H', `<input type="number" data-p="bg.h" value="${Math.round(bg.h)}" min="10">`)}</div>`;
+          h += `<div class="me-grid2"><button data-cmd="bg-smaller" class="me-wide">− 10 %</button><button data-cmd="bg-bigger" class="me-wide">+ 10 %</button></div>`;
+          h += `<button data-cmd="bg-move" class="me-wide${this.bgMove ? ' on' : ''}">${this.bgMove ? '✔ Verschieben aktiv – auf leere Fläche ziehen' : '✋ Hintergrund verschieben'}</button>`;
+          h += '<button data-cmd="bg-ratio" class="me-wide">Seitenverhältnis wiederherstellen</button>';
+          h += '<label class="me-wide me-filebtn">Anderes Bild …<input type="file" accept="image/*" data-bgfile hidden></label>';
+          h += '<button data-cmd="bg-remove" class="me-wide danger">Hintergrundbild entfernen</button>';
+        }
         if (this.opts.renderShare) h += this.opts.renderShare();
         h += `<h4>Tastatur</h4><ul class="me-keys">
           <li><kbd>Entf</kbd> löschen · <kbd>Strg</kbd>+<kbd>D</kbd> duplizieren</li>
@@ -754,6 +774,7 @@
       const set = (obj, key, v) => { obj[key] = v; };
       const [a, b] = path.split('.');
       if (a === 'settings') { this.data.settings[b] = value; if (b === 'gridSize') this.updateGridPattern(); }
+      else if (a === 'bg') { if (this.data.settings.bg) this.data.settings.bg[b] = b === 'opacity' ? value : Math.max(b === 'w' || b === 'h' ? 10 : -1e6, parseFloat(value) || 0); }
       else if (a === 'refresh') this.refresh = clamp(parseInt(value, 10) || 30, 5, 3600);
       else for (const o of [...nodes, ...edges]) {
         if (a === 'style') { o.style = o.style || {}; set(o.style, b, value); }
@@ -817,6 +838,7 @@
       });
       this.props.parentElement.addEventListener('change', (ev) => {
         const el = ev.target;
+        if (el.hasAttribute && el.hasAttribute('data-bgfile')) { this.loadBackground(el.files[0]); return; }
         this._liveUndo = false;
         if (!el.dataset.p) return;
         if (el.type === 'checkbox' || el.tagName === 'SELECT') this.applyProp(el.dataset.p, el.type === 'checkbox' ? el.checked : el.value);
@@ -993,6 +1015,12 @@
         this.render();
         return;
       }
+      // Hintergrund verschieben
+      if (this.bgMove && this.data.settings.bg) {
+        this.pushUndo();
+        this.drag = { type: 'bg', start: w, x: this.data.settings.bg.x || 0, y: this.data.settings.bg.y || 0 };
+        return;
+      }
       // leere Fläche: Auswahlrahmen
       if (!ev.shiftKey) this.sel.clear();
       this.drag = { type: 'rubber', start: w, rect: { x: w.x, y: w.y, w: 0, h: 0 }, base: new Set(this.sel) };
@@ -1069,6 +1097,12 @@
         const fp = fr.n ? (fr.port ? this.portPoint(fr.n, fr.port) : this.perimeter(fr.n, endP)) : fr.pt;
         d.preview = [fp, endP];
         this.renderOverlay();
+        return;
+      }
+      if (d.type === 'bg') {
+        const bg = this.data.settings.bg;
+        bg.x = Math.round(d.x + (w.x - d.start.x)); bg.y = Math.round(d.y + (w.y - d.start.y));
+        this.markDirty(); this.renderFast();
         return;
       }
       if (d.type === 'wp') {
@@ -1244,8 +1278,10 @@
     }
 
     bbox(nodes) {
-      if (!nodes.length) return null;
+      const bgi = this.data.settings.bg;
+      if (!nodes.length && !(bgi && bgi.src)) return null;
       let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity;
+      if (bgi && bgi.src) { x1 = bgi.x || 0; y1 = bgi.y || 0; x2 = x1 + bgi.w; y2 = y1 + bgi.h; }
       for (const n of nodes) { x1 = Math.min(x1, n.x); y1 = Math.min(y1, n.y); x2 = Math.max(x2, n.x + n.w); y2 = Math.max(y2, n.y + n.h + ((n.kind === 'icon' || (n.style && n.style.labelPos === 'bottom')) ? 30 : 0)); }
       for (const e of this.data.edges) for (const p of e.points || []) { x1 = Math.min(x1, p.x); y1 = Math.min(y1, p.y); x2 = Math.max(x2, p.x); y2 = Math.max(y2, p.y); }
       return { x: x1, y: y1, w: x2 - x1, h: y2 - y1 };
@@ -1451,6 +1487,10 @@
         case 'fit': this.fit(); break;
         case 'select-all': this.data.nodes.forEach((n) => this.sel.add(n.id)); this.render(); break;
         case 'edit-label': if (this.sel.size === 1) { const id = [...this.sel][0]; this.onDouble({ id }, { x: 0, y: 0 }); } break;
+        case 'bg-remove': this.pushUndo(); delete this.data.settings.bg; this.bgMove = false; this.markDirty(); this.render(); break;
+        case 'bg-move': this.bgMove = !this.bgMove; this.sel.clear(); this.render(); break;
+        case 'bg-bigger': case 'bg-smaller': { const bg = this.data.settings.bg; if (!bg) break; this.pushUndo(); const f = c === 'bg-bigger' ? 1.1 : 1 / 1.1; bg.w *= f; bg.h *= f; this.markDirty(); this.render(); break; }
+        case 'bg-ratio': { const bg = this.data.settings.bg; if (!bg || !bg.nw) break; this.pushUndo(); bg.h = bg.w * bg.nh / bg.nw; this.markDirty(); this.render(); break; }
         case 'clear-waypoints': this.pushUndo(); for (const e of this.selEdges()) delete e.points; this.markDirty(); this.render(); break;
         case 'export-menu': { const m = btn.parentElement.querySelector('.me-menu'); m.hidden = !m.hidden; break; }
         case 'export-svg': this.download(this.name + '.svg', new Blob([this.exportSvg()], { type: 'image/svg+xml' })); break;
@@ -1490,6 +1530,39 @@
     }
 
     serialize() { return { name: this.name, refresh_s: this.refresh, data: this.data }; }
+
+    /** Bild laden, große Rasterbilder verkleinern (max. 2400 px, JPEG wenn > 1,5 MB), als data-URI speichern. */
+    loadBackground(file) {
+      if (!file) return;
+      const rd = new FileReader();
+      rd.onload = () => {
+        const src = rd.result;
+        const img = new Image();
+        img.onload = () => {
+          let out = src, nw = img.naturalWidth || 1200, nh = img.naturalHeight || 800;
+          const isSvg = /^data:image\/svg/.test(src);
+          if (!isSvg && (Math.max(nw, nh) > 2400 || src.length > 1.5e6)) {
+            const k = Math.min(1, 2400 / Math.max(nw, nh));
+            const c = document.createElement('canvas');
+            c.width = Math.round(nw * k); c.height = Math.round(nh * k);
+            c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+            out = c.toDataURL('image/png');
+            if (out.length > 1.5e6) out = c.toDataURL('image/jpeg', 0.85);
+            nw = c.width; nh = c.height;
+          }
+          if (out.length > 10e6) { alert('Bild ist auch verkleinert noch zu groß.'); return; }
+          this.pushUndo();
+          const b = this.bboxPlain(this.data.nodes.length ? this.data.nodes : [{ x: 0, y: 0, w: 0, h: 0 }]);
+          const w = Math.min(nw, 1600), h = w * nh / nw;
+          const old = this.data.settings.bg;
+          this.data.settings.bg = old ? Object.assign(old, { src: out, nw, nh, h: old.w * nh / nw }) : { src: out, x: Math.round(b.x), y: Math.round(b.y), w, h, nw, nh, opacity: 0.6 };
+          this.markDirty(); this.render(); if (!old) this.fit();
+        };
+        img.onerror = () => alert('Bild konnte nicht gelesen werden.');
+        img.src = src;
+      };
+      rd.readAsDataURL(file);
+    }
 
     importJson(file) {
       if (!file) return;

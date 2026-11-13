@@ -54,6 +54,47 @@ function scan_parse_targets(string $in): array
     return array_values(array_unique($ips));
 }
 
+/** Ausschluss-Bereiche (z. B. DHCP-Pools) → Liste [start, ende] als Zahlen. Erlaubt CIDR (/8–/32), Bereiche, Einzel-IPs, # Kommentare. */
+function scan_parse_ranges(string $in): array
+{
+    $out = [];
+    foreach (preg_split('/\R/', $in) as $line) {
+        $line = trim(preg_replace('/#.*$/', '', $line));
+        foreach (preg_split('/[\s,;]+/', $line) as $t) {
+            if ($t === '') {
+                continue;
+            }
+            if (preg_match('#^(\d+\.\d+\.\d+\.\d+)/(\d{1,2})$#', $t, $m) && ip2long($m[1]) !== false && (int) $m[2] >= 8 && (int) $m[2] <= 32) {
+                $net = ip2long($m[1]) & (-1 << (32 - (int) $m[2]));
+                $out[] = [$net, $net + (1 << (32 - (int) $m[2])) - 1];
+            } elseif (preg_match('#^(\d+\.\d+\.\d+\.\d+)\s*-\s*(\d+\.\d+\.\d+\.\d+|\d+)$#', $t, $m) && ip2long($m[1]) !== false) {
+                $a = ip2long($m[1]);
+                $b = str_contains($m[2], '.') ? ip2long($m[2]) : (($a & ~0xff) | (int) $m[2]);
+                if ($b === false || $b < $a) {
+                    throw new InvalidArgumentException("DHCP-/Ausschlussbereich „{$t}“ ungültig");
+                }
+                $out[] = [$a, $b];
+            } elseif (filter_var($t, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
+                $out[] = [ip2long($t), ip2long($t)];
+            } else {
+                throw new InvalidArgumentException("DHCP-/Ausschlussbereich „{$t}“ nicht erkannt (Beispiele: 192.168.1.100-192.168.1.199, 192.168.1.100-199, 10.0.5.0/24)");
+            }
+        }
+    }
+    return $out;
+}
+
+function ip_in_ranges(string $ip, array $ranges): bool
+{
+    $n = ip2long($ip);
+    foreach ($ranges as [$a, $b]) {
+        if ($n >= $a && $n <= $b) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /** Viele Kommandos parallel ausführen → [key => stdout] */
 function scan_parallel(array $cmds, int $parallel = 96, int $timeout = 8): array
 {
