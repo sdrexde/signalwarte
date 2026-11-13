@@ -56,6 +56,21 @@
       return { type: x.type, name: fillTpl(x.name, host, param), config: cfg, optional: !!x.optional };
     });
   }
+  // Gerätesortierung: 'ip' (1, 2, … 254 numerisch) oder 'name' (natürlich, „Server 2“ vor „Server 10“)
+  const ipNum = (h) => (/^\d{1,3}(\.\d{1,3}){3}$/.test(h || '') ? h.split('.').reduce((a, x) => a * 256 + Number(x), 0) : null);
+  const natCmp = (a, b) => String(a).localeCompare(String(b), 'de', { numeric: true, sensitivity: 'base' });
+  function sortMode() { try { return localStorage.getItem('rm_sort') || 'ip'; } catch (e) { return 'ip'; } }
+  function sortDevices(list) {
+    const mode = sortMode();
+    return [...list].sort((a, b) => {
+      if (mode === 'ip') {
+        const x = ipNum(a.host), y = ipNum(b.host);
+        if (x !== null && y !== null && x !== y) return x - y;
+        if ((x === null) !== (y === null)) return x === null ? 1 : -1;
+      }
+      return natCmp(a.name, b.name) || natCmp(a.host, b.host);
+    });
+  }
   const sensorUrl = (d) => (d.creds && d.creds.web_url) || ((d.sensors || []).find((s) => s.url) || {}).url || '';
 
   const S = { boot: null, tree: null, counts: {}, heartbeat: 0, now: 0, view: null, editor: null, chart: null, drawerSensor: null, filter: '', search: '' };
@@ -263,7 +278,7 @@
     const grp = (g, depth) => {
       if (!groupVisible(g)) return '';
       const isRoot = g.kind === 'root';
-      const body = `${g.devices.filter(deviceVisible).map(devRow).join('')}${g.groups.map((c) => grp(c, depth + 1)).join('')}`;
+      const body = `${sortDevices(g.devices.filter(deviceVisible)).map(devRow).join('')}${g.groups.map((c) => grp(c, depth + 1)).join('')}`;
       if (isRoot) return body;
       const collapsed = g.collapsed && !f && !q;
       return `<section class="grp kind-${g.kind}${collapsed ? ' collapsed' : ''}" data-group="${g.id}">
@@ -278,7 +293,7 @@
     el.innerHTML = `<div class="page">
       <div class="pagehead"><h1>Geräte</h1>
         <div class="filters">${['', ...ORDER].map((k) => `<button class="fbtn${f === k ? ' on' : ''}" data-filter="${k}">${k ? dot(k) + ' ' + ST()[k] : 'Alle'}${k ? ` <b>${S.counts[k] || 0}</b>` : ''}</button>`).join('')}</div>
-        <div class="actions">${isAdmin() ? '<button class="btn" data-act="scan">🔍 Netzwerk scannen</button><button class="btn" data-act="add-group">+ Gruppe</button><button class="btn primary" data-act="add-device">+ Gerät</button>' : ''}</div></div>
+        <div class="actions"><select id="sortSel" class="sortsel" title="Sortierung der Geräte"><option value="ip"${sortMode() === 'ip' ? ' selected' : ''}>Sortieren: IP-Adresse</option><option value="name"${sortMode() === 'name' ? ' selected' : ''}>Sortieren: Name</option></select>${isAdmin() ? '<button class="btn" data-act="scan">🔍 Netzwerk scannen</button><button class="btn" data-act="add-group">+ Gruppe</button><button class="btn primary" data-act="add-device">+ Gerät</button>' : ''}</div></div>
       ${q ? `<p class="muted">Suche: „${esc(q)}“ <a href="#" data-act="clear-search">zurücksetzen</a></p>` : ''}
       <div class="tree">${S.tree ? grp(S.tree, 0) : ''}</div></div>`;
   }
@@ -1095,6 +1110,10 @@
 
   document.addEventListener('keydown', (ev) => {
     if (ev.key === 'Escape') { if (!$('#modalBack').hidden) closeModal(); else if (!$('#drawer').hidden) closeDrawer(); }
+  });
+
+  document.addEventListener('change', (ev) => {
+    if (ev.target.id === 'sortSel') { try { localStorage.setItem('rm_sort', ev.target.value); } catch (e) { /* egal */ } route(true); }
   });
 
   $('#userBtn').addEventListener('click', () => { $('#userMenu').hidden = !$('#userMenu').hidden; });

@@ -136,8 +136,10 @@ function sensor_run(array $s): array
 function build_tree(): array
 {
     $pg = paused_group_ids();
-    $groups = db()->query('SELECT * FROM groups ORDER BY sort, name')->fetchAll();
-    $devices = db()->query('SELECT * FROM devices ORDER BY sort, name')->fetchAll();
+    $groups = db()->query('SELECT * FROM groups')->fetchAll();
+    usort($groups, fn($a, $b) => [(int) $a['sort'], 0] <=> [(int) $b['sort'], 0] ?: strnatcasecmp($a['name'], $b['name']));
+    $devices = db()->query('SELECT * FROM devices')->fetchAll();
+    usort($devices, 'device_cmp');
     $sensors = db()->query(SENSOR_SELECT . ' ORDER BY s.sort, s.id')->fetchAll();
     $types = sensor_types();
 
@@ -201,6 +203,20 @@ function build_tree(): array
     };
     $root = $byParent[0][0] ?? null;
     return ['root' => $root ? $mk($root) : null, 'counts' => $counts];
+}
+
+/** Sortierung: IPv4 numerisch (1, 2, … 110, 254), danach Namen natürlich sortiert. */
+function device_cmp(array $a, array $b): int
+{
+    $ia = ip2long((string) $a['host']);
+    $ib = ip2long((string) $b['host']);
+    if ($ia !== false && $ib !== false && $ia !== $ib) {
+        return sprintf('%u', $ia) <=> sprintf('%u', $ib);
+    }
+    if (($ia === false) !== ($ib === false)) {
+        return $ia === false ? 1 : -1;
+    }
+    return strnatcasecmp((string) $a['name'], (string) $b['name']);
 }
 
 /** Öffnenbare Web-Adresse eines Sensors (HTTP-Sensoren, Web-Ports). */

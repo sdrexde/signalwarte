@@ -418,3 +418,4 @@ kbd { font-size: 10.5px; border: 1px solid var(--line2); border-bottom-width: 2p
 .recovery { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin: 12px 0; }
 .recovery code { font-size: 16px; padding: 8px; text-align: center; background: var(--hover); border: 1px solid var(--line); border-radius: 6px; letter-spacing: .05em; }
 .auth-form input[name=code] { font-size: 20px; letter-spacing: .2em; text-align: center; }
+.sortsel { padding: 6px 8px; font-size: 13px; }
