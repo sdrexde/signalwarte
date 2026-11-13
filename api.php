@@ -71,6 +71,7 @@ try {
                 'notification_types' => notification_types(),
                 'heartbeat' => (int) setting('poller_heartbeat', '0'), 'now' => time(),
                 'version' => APP_VERSION,
+                'icons' => $db->query('SELECT id, name, data FROM icons ORDER BY name')->fetchAll(),
             ]);
 
         case 'tree':
@@ -95,8 +96,10 @@ try {
             $up = $db->prepare("SELECT COUNT(*) AS n, SUM(status IN ('up','warning')) AS ok, AVG(value) AS avg, MIN(value) AS min, MAX(value) AS max FROM results WHERE sensor_id = ? AND ts > ?");
             $up->execute([$s['id'], time() - 86400]);
             $s['stats24'] = $up->fetch();
-            if ($s['type'] === 'push') {
-                $s['push_url'] = $s['push_token'];
+            unset($s['state'], $s['creds']);
+            $s['channels'] = json_decode((string) $s['last_channels'], true) ?: $s['channels'];
+            if (!is_admin()) {
+                unset($s['push_token']);
             }
             json_out(['ok' => true, 'sensor' => $s]);
 
@@ -106,10 +109,19 @@ try {
             $from = time() - $range;
             $points = 300;
             $step = max(1, intdiv($range, $points));
-            $st = $db->prepare("SELECT (ts / :step) * :step AS t, AVG(value) AS v, MIN(value) AS mn, MAX(value) AS mx,
+            $ch = (string) ($_GET['channel'] ?? '');
+            $col = 'value';
+            if ($ch !== '') {
+                $col = "json_extract(extra, '$.\"' || :ch || '\"')";
+            }
+            $st = $db->prepare("SELECT (ts / :step) * :step AS t, AVG({$col}) AS v, MIN({$col}) AS mn, MAX({$col}) AS mx,
                     MAX(CASE status WHEN 'down' THEN 3 WHEN 'warning' THEN 2 ELSE 1 END) AS s
                 FROM results WHERE sensor_id = :id AND ts >= :from GROUP BY t ORDER BY t");
-            $st->execute([':step' => $step, ':id' => $id, ':from' => $from]);
+            $args = [':step' => $step, ':id' => $id, ':from' => $from];
+            if ($ch !== '') {
+                $args[':ch'] = str_replace('"', '', $ch);
+            }
+            $st->execute($args);
             $rows = array_map(fn($r) => [(int) $r['t'], $r['v'] !== null ? round((float) $r['v'], 3) : null,
                 $r['mn'] !== null ? (float) $r['mn'] : null, $r['mx'] !== null ? (float) $r['mx'] : null, (int) $r['s']], $st->fetchAll());
             json_out(['ok' => true, 'points' => $rows, 'step' => $step]);
@@ -195,11 +207,32 @@ try {
             if ($host !== '' && !valid_host($host)) {
                 json_err('Ungültiger Host / IP');
             }
-            $fields = [$in_group = in_int($in, 'group_id') ?? 2, $name, $host, in_str($in, 'icon', 40) ?: 'server', in_str($in, 'notes', 4000), in_int($in, 'depends_on')];
+            $old = [];
             if ($id) {
-                $db->prepare('UPDATE devices SET group_id = ?, name = ?, host = ?, icon = ?, notes = ?, depends_on = ? WHERE id = ?')->execute([...$fields, $id]);
+                $q = $db->prepare('SELECT creds FROM devices WHERE id = ?');
+                $q->execute([$id]);
+                $old = json_decode((string) $q->fetchColumn(), true) ?: [];
+            }
+            $ci = (array) ($in['creds'] ?? []);
+            $creds = [
+                'snmp_community' => in_str($ci, 'snmp_community', 100),
+                'snmp_version'   => (int) ($ci['snmp_version'] ?? 2) === 1 ? 1 : 2,
+                'snmp_port'      => max(1, min(65535, (int) ($ci['snmp_port'] ?? 161) ?: 161)),
+                'username'       => in_str($ci, 'username', 100),
+                'password'       => ($ci['password'] ?? '') !== '' ? (string) $ci['password'] : (string) ($old['password'] ?? ''),
+                'web_url'        => in_str($ci, 'web_url', 300),
+            ];
+            if (!empty($ci['clear_password'])) {
+                $creds['password'] = '';
+            }
+            if ($creds['web_url'] !== '' && !preg_match('#^https?://#i', $creds['web_url'])) {
+                json_err('Weboberfläche: URL muss mit http:// oder https:// beginnen');
+            }
+            $fields = [in_int($in, 'group_id') ?? 2, $name, $host, in_str($in, 'icon', 40) ?: 'server', in_str($in, 'notes', 4000), in_int($in, 'depends_on'), json_encode($creds, JSON_UNESCAPED_UNICODE)];
+            if ($id) {
+                $db->prepare('UPDATE devices SET group_id = ?, name = ?, host = ?, icon = ?, notes = ?, depends_on = ?, creds = ? WHERE id = ?')->execute([...$fields, $id]);
             } else {
-                $db->prepare('INSERT INTO devices(group_id, name, host, icon, notes, depends_on) VALUES(?, ?, ?, ?, ?, ?)')->execute($fields);
+                $db->prepare('INSERT INTO devices(group_id, name, host, icon, notes, depends_on, creds) VALUES(?, ?, ?, ?, ?, ?, ?)')->execute($fields);
                 $id = (int) $db->lastInsertId();
                 log_event('user', "Gerät angelegt: {$name} ({$host})", null, $id);
             }
@@ -225,15 +258,15 @@ try {
             $st = $db->prepare('SELECT * FROM devices WHERE id = ?');
             $st->execute([(int) $in['id']]);
             $d = $st->fetch() ?: json_err('Gerät nicht gefunden', 404);
-            $db->prepare('INSERT INTO devices(group_id, name, host, icon, notes) VALUES(?, ?, ?, ?, ?)')
-                ->execute([$d['group_id'], $d['name'] . ' (Kopie)', $in['host'] ?? $d['host'], $d['icon'], $d['notes']]);
+            $db->prepare('INSERT INTO devices(group_id, name, host, icon, notes, creds) VALUES(?, ?, ?, ?, ?, ?)')
+                ->execute([$d['group_id'], $d['name'] . ' (Kopie)', $in['host'] ?? $d['host'], $d['icon'], $d['notes'], $d['creds']]);
             $nid = (int) $db->lastInsertId();
             $ss = $db->prepare('SELECT * FROM sensors WHERE device_id = ?');
             $ss->execute([$d['id']]);
             foreach ($ss->fetchAll() as $s) {
                 $db->prepare('INSERT INTO sensors(device_id, name, type, config, interval_s, warn_max, err_max, warn_min, err_min, push_token) VALUES(?,?,?,?,?,?,?,?,?,?)')
                     ->execute([$nid, $s['name'], $s['type'], $s['config'], $s['interval_s'], $s['warn_max'], $s['err_max'], $s['warn_min'], $s['err_min'],
-                        $s['type'] === 'push' ? random_token() : null]);
+                        in_array($s['type'], PUSH_TYPES, true) ? random_token() : null]);
             }
             json_out(['ok' => true, 'id' => $nid]);
 
@@ -288,7 +321,7 @@ try {
             if (!valid_host($host)) {
                 json_err('Ungültiger Host');
             }
-            json_out(['ok' => true, 'found' => discover_host($host)]);
+            json_out(['ok' => true] + discover_host($host));
 
         case 'map_save':
             $id = in_int($in, 'id');
@@ -387,6 +420,52 @@ try {
             setting_set('poller_workers', (string) max(1, min(32, (int) ($in['poller_workers'] ?? 8))));
             json_out(['ok' => true]);
 
+        case 'snmp_interfaces':
+            require_once __DIR__ . '/lib/snmp.php';
+            $st = $db->prepare('SELECT host, creds FROM devices WHERE id = ?');
+            $st->execute([(int) ($in['device_id'] ?? 0)]);
+            $d = $st->fetch() ?: json_err('Gerät nicht gefunden', 404);
+            try {
+                $c = snmp_for($d['host'], ['community' => (string) ($in['community'] ?? '')], ['creds' => $d['creds']]);
+                json_out(['ok' => true, 'interfaces' => array_values(snmp_interfaces($c))]);
+            } catch (Throwable $e) {
+                json_err($e->getMessage());
+            }
+
+        case 'scan':
+            require_once __DIR__ . '/lib/scanner.php';
+            @set_time_limit(300);
+            session_write_close();
+            $targets = scan_parse_targets((string) ($in['targets'] ?? ''));
+            $existing = array_column($db->query("SELECT host, name FROM devices WHERE host != ''")->fetchAll(), 'name', 'host');
+            $res = scan_network($targets, (array) ($in['creds'] ?? []), !empty($in['deep']));
+            foreach ($res as &$r) {
+                $r['exists'] = $existing[$r['ip']] ?? ($r['hostname'] !== '' ? ($existing[$r['hostname']] ?? null) : null);
+            }
+            json_out(['ok' => true, 'hosts' => $res, 'scanned' => count($targets)]);
+
+        case 'icon_save':
+            $data = (string) ($in['data'] ?? '');
+            if (!preg_match('#^data:image/(svg\+xml|png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+$#', $data)) {
+                json_err('Nur SVG, PNG, JPG, WebP oder GIF');
+            }
+            if (strlen($data) > 400_000) {
+                json_err('Icon zu groß (max. ca. 300 KB)');
+            }
+            if (str_starts_with($data, 'data:image/svg')) {
+                $svg = base64_decode(substr($data, strpos($data, ',') + 1));
+                if (preg_match('/<script|on[a-z]+\s*=|javascript:|<foreignObject/i', $svg)) {
+                    json_err('SVG enthält Skripte – bitte bereinigte Datei verwenden');
+                }
+            }
+            $db->prepare('INSERT INTO icons(name, data, created_at) VALUES(?, ?, ?)')->execute([require_name(in_str($in, 'name', 60)), $data, time()]);
+            json_out(['ok' => true, 'id' => (int) $db->lastInsertId()]);
+
+        case 'icon_delete':
+            $db->prepare('DELETE FROM icons WHERE id = ?')->execute([(int) $in['id']]);
+            $db->prepare("UPDATE devices SET icon = 'server' WHERE icon = ?")->execute(['c' . (int) $in['id']]);
+            json_out(['ok' => true]);
+
         default:
             json_err('Unbekannte Aktion', 404);
     }
@@ -418,59 +497,35 @@ function create_sensor(int $deviceId, string $type, string $name, array $config,
         ->execute([$deviceId, $name, $type, json_encode($cfg, JSON_UNESCAPED_UNICODE),
             $iv = max(10, (int) ($in['interval_s'] ?? $def['interval'])),
             $pick('warn_max'), $pick('err_max'), $pick('warn_min'), $pick('err_min'), time(),
-            $type === 'push' ? random_token() : null,
-            $type === 'push' ? time() + $iv : 0]);
+            in_array($type, PUSH_TYPES, true) ? random_token() : null,
+            in_array($type, PUSH_TYPES, true) ? time() + $iv : 0]);
     return (int) db()->lastInsertId();
 }
 
-/** Mini-Auto-Discovery: Ping + gängige Ports prüfen und passende Sensoren vorschlagen. */
+/** Auto-Discovery für ein Gerät: nutzt den Netzwerkscanner (Ports, HTTP-Titel, Gerätetyp). */
 function discover_host(string $host): array
 {
+    require_once __DIR__ . '/lib/scanner.php';
+    $ip = filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) ? $host : gethostbyname($host);
+    if (!filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
+        json_err('Host nicht auflösbar (IPv4)');
+    }
+    $res = scan_network([$ip], [], true);
+    if (!$res) {
+        return ['found' => [], 'meta' => null];
+    }
+    $h = $res[0];
     $found = [];
-    $p = check_ping($host, ['count' => 2, 'timeout' => 1]);
-    if ($p['status'] !== 'down') {
-        $found[] = ['type' => 'ping', 'name' => 'Ping', 'config' => [], 'info' => $p['message']];
-    }
-    $ports = [21 => 'FTP', 22 => 'SSH', 25 => 'SMTP', 53 => 'DNS', 80 => 'HTTP', 110 => 'POP3', 143 => 'IMAP', 443 => 'HTTPS',
-        445 => 'SMB', 587 => 'SMTP Submission', 993 => 'IMAPS', 1433 => 'MS SQL', 3306 => 'MySQL', 3389 => 'RDP',
-        5432 => 'PostgreSQL', 5900 => 'VNC', 8006 => 'Proxmox', 8080 => 'HTTP-Alt', 8443 => 'HTTPS-Alt', 9100 => 'Drucker (RAW)'];
-    $target = str_contains($host, ':') ? "[{$host}]" : $host;
-    $socks = [];
-    foreach ($ports as $port => $label) {
-        $s = @stream_socket_client("tcp://{$target}:{$port}", $e, $es, 1.5, STREAM_CLIENT_ASYNC_CONNECT | STREAM_CLIENT_CONNECT);
-        if ($s) {
-            $socks[$port] = $s;
+    foreach ($h['sensors'] as $s) {
+        $cfg = $s['config'];
+        // Hostname statt IP in URLs verwenden, wenn so eingegeben
+        if ($ip !== $host && isset($cfg['url'])) {
+            $cfg['url'] = str_replace('://' . $ip, '://' . $host, $cfg['url']);
         }
+        $found[] = ['type' => $s['type'], 'name' => $s['name'], 'config' => $cfg, 'optional' => !empty($s['optional']),
+            'info' => $s['type'] === 'ping' ? ($h['ping'] !== null ? $h['ping'] . ' ms' : 'keine Antwort') : (!empty($s['optional']) ? 'benötigt SNMP/Agent' : 'erkannt')];
     }
-    $deadline = microtime(true) + 1.6;
-    $open = [];
-    while ($socks && microtime(true) < $deadline) {
-        $w = $socks;
-        $r = $ex = null;
-        if (@stream_select($r, $w, $ex, 0, 200000) > 0) {
-            foreach ($w as $s) {
-                $port = array_search($s, $socks, true);
-                if (@stream_socket_get_name($s, true) !== false) {
-                    $open[] = $port;
-                }
-                fclose($s);
-                unset($socks[$port]);
-            }
-        }
-    }
-    foreach ($socks as $s) {
-        fclose($s);
-    }
-    sort($open);
-    foreach ($open as $port) {
-        $found[] = ['type' => 'port', 'name' => "Port {$port} ({$ports[$port]})", 'config' => ['port' => $port], 'info' => 'offen'];
-        if (in_array($port, [80, 8080], true)) {
-            $found[] = ['type' => 'http', 'name' => "HTTP :{$port}", 'config' => ['url' => "http://{$host}:{$port}/"], 'info' => 'Webserver'];
-        }
-        if (in_array($port, [443, 8443, 8006], true)) {
-            $found[] = ['type' => 'http', 'name' => "HTTPS :{$port}", 'config' => ['url' => "https://{$host}:{$port}/", 'verify_ssl' => false], 'info' => 'Webserver (TLS)'];
-            $found[] = ['type' => 'ssl', 'name' => "SSL-Zertifikat :{$port}", 'config' => ['port' => $port], 'info' => 'Zertifikatslaufzeit'];
-        }
-    }
-    return $found;
+    $meta = ['type' => $h['type'], 'icon' => $h['icon'], 'template' => $h['template'], 'web_url' => $ip !== $host ? str_replace('://' . $ip, '://' . $host, $h['web_url']) : $h['web_url'],
+        'name' => $h['hostname'] ? preg_replace('/\..*$/', '', $h['hostname']) : $h['name'], 'ports' => $h['port_names'], 'vendor' => $h['vendor'], 'mac' => $h['mac']];
+    return ['found' => $found, 'meta' => $meta];
 }

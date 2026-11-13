@@ -80,6 +80,56 @@ function sensor_types(): array
             ],
             'limits' => [],
         ],
+        'snmp_system' => [
+            'label' => 'SNMP System', 'icon' => '🖥️', 'unit' => '%', 'interval' => 60,
+            'desc'  => 'CPU, Arbeitsspeicher und Laufzeit per SNMP (pfSense, Switches, Linux, NAS, Windows mit SNMP-Dienst).',
+            'fields' => [
+                ['key' => 'community', 'label' => 'Community (leer = vom Gerät)', 'type' => 'text', 'default' => ''],
+            ],
+            'limits' => ['warn_max' => 80, 'err_max' => 95],
+        ],
+        'snmp_traffic' => [
+            'label' => 'SNMP Traffic', 'icon' => '📊', 'unit' => 'Mbit/s', 'interval' => 60,
+            'desc'  => 'Datenrate eines Interfaces (ein/aus) per SNMP, inkl. Auslastung und Link-Status.',
+            'fields' => [
+                ['key' => 'interface', 'label' => 'Interface (Index oder Name, z. B. igb0 / WAN)', 'type' => 'text', 'default' => ''],
+                ['key' => 'community', 'label' => 'Community (leer = vom Gerät)', 'type' => 'text', 'default' => ''],
+                ['key' => 'down_is_error', 'label' => 'Link down = Fehler', 'type' => 'bool', 'default' => true],
+            ],
+            'limits' => [],
+        ],
+        'snmp_custom' => [
+            'label' => 'SNMP Wert (OID)', 'icon' => '🔢', 'unit' => '', 'interval' => 60,
+            'desc'  => 'Beliebige OID abfragen – als Wert oder als Rate pro Sekunde (z. B. pfSense-Firewall-States).',
+            'fields' => [
+                ['key' => 'oid', 'label' => 'OID', 'type' => 'text', 'default' => ''],
+                ['key' => 'mode', 'label' => 'Auswertung', 'type' => 'select', 'options' => ['Wert', 'Rate pro Sekunde'], 'default' => 'Wert'],
+                ['key' => 'factor', 'label' => 'Faktor (z. B. 0.01)', 'type' => 'number', 'default' => 1],
+                ['key' => 'unit', 'label' => 'Einheit', 'type' => 'text', 'default' => ''],
+                ['key' => 'community', 'label' => 'Community (leer = vom Gerät)', 'type' => 'text', 'default' => ''],
+            ],
+            'limits' => [],
+        ],
+        'fritzbox' => [
+            'label' => 'FRITZ!Box', 'icon' => '📡', 'unit' => 'Mbit/s', 'interval' => 60,
+            'desc'  => 'Internet-Verbindung, externe IP, aktuelle Up-/Download-Rate, Sync-Raten, Laufzeit, Modell/Firmware, verbundene Geräte (TR-064).',
+            'fields' => [
+                ['key' => 'check_wan', 'label' => 'Internetverbindung prüfen (aus bei Repeater/IP-Client)', 'type' => 'bool', 'default' => true],
+                ['key' => 'port', 'label' => 'TR-064-Port', 'type' => 'number', 'default' => 49000],
+            ],
+            'limits' => [],
+        ],
+        'agent' => [
+            'label' => 'Windows-Agent', 'icon' => '🪟', 'unit' => '%', 'interval' => 120,
+            'desc'  => 'PowerShell-Agent (wie bei Spurwerk: herunterladen, ausführen, fertig) meldet CPU, RAM, Laufwerke, Dienste, Updates, Neustart nötig, Ereignis-Fehler, Defender, Netzwerk.',
+            'fields' => [
+                ['key' => 'primary', 'label' => 'Hauptwert (Kanalname)', 'type' => 'text', 'default' => 'CPU %'],
+                ['key' => 'services', 'label' => 'Zu überwachende Dienste (Komma-getrennt, z. B. DNS,NTDS,MSSQLSERVER)', 'type' => 'text', 'default' => ''],
+                ['key' => 'disk_warn', 'label' => 'Laufwerk frei Warnung unter %', 'type' => 'number', 'default' => 15],
+                ['key' => 'disk_err', 'label' => 'Laufwerk frei Fehler unter %', 'type' => 'number', 'default' => 5],
+            ],
+            'limits' => ['warn_max' => 90, 'err_max' => null],
+        ],
         'cpu' => [
             'label' => 'CPU-Last (Probe)', 'icon' => '🧠', 'unit' => '%', 'interval' => 60,
             'desc'  => 'CPU-Auslastung des Servers, auf dem der Monitor läuft (lokale Probe).',
@@ -148,6 +198,10 @@ function sensor_check(array $sensor): array
             'dns'       => check_dns($host, $cfg),
             'ssl'       => check_ssl($host, $cfg),
             'http_json' => check_http_json($cfg),
+            'snmp_system' => check_snmp_system($host, $cfg, $sensor),
+            'snmp_traffic' => check_snmp_traffic($host, $cfg, $sensor),
+            'snmp_custom' => check_snmp_custom($host, $cfg, $sensor),
+            'fritzbox'  => check_fritzbox($host, $cfg, $sensor),
             'cpu'       => check_cpu(),
             'memory'    => check_memory(),
             'disk'      => check_disk($cfg),
@@ -436,6 +490,350 @@ function check_disk(array $cfg): array
     }
     $pct = round(($total - $free) / $total * 100, 1);
     return r_ok($pct, '%', sprintf('%s: %.1f GB frei von %.1f GB', $path, $free / 1e9, $total / 1e9), ['Frei (GB)' => round($free / 1e9, 1)]);
+}
+
+/* ==================================================================== SNMP */
+
+function sensor_creds(array $sensor): array
+{
+    $c = json_decode((string) ($sensor['creds'] ?? '{}'), true);
+    return is_array($c) ? $c : [];
+}
+
+function snmp_for(string $host, array $cfg, array $sensor): SnmpClient
+{
+    require_once __DIR__ . '/snmp.php';
+    if (!valid_host($host)) {
+        throw new RuntimeException('Kein gültiger Host am Gerät hinterlegt');
+    }
+    $cr = sensor_creds($sensor);
+    $community = trim((string) ($cfg['community'] ?? '')) ?: (trim((string) ($cr['snmp_community'] ?? '')) ?: 'public');
+    $ver = (int) ($cr['snmp_version'] ?? 2) === 1 ? 1 : 2;
+    $port = (int) ($cr['snmp_port'] ?? 161) ?: 161;
+    return new SnmpClient($host, $community, $ver, $port, 2.0, 1);
+}
+
+function sensor_state(array $sensor): array
+{
+    $st = json_decode((string) ($sensor['state'] ?? ''), true);
+    return is_array($st) ? $st : [];
+}
+
+function fmt_uptime(float $sec): string
+{
+    $d = floor($sec / 86400);
+    $h = floor(fmod($sec, 86400) / 3600);
+    $m = floor(fmod($sec, 3600) / 60);
+    return ($d ? "{$d} T " : '') . "{$h} h {$m} min";
+}
+
+function check_snmp_system(string $host, array $cfg, array $sensor): array
+{
+    require_once __DIR__ . '/snmp.php';
+    $c = snmp_for($host, $cfg, $sensor);
+    $base = $c->get([OID_SYS_DESCR, OID_SYS_UPTIME, OID_SYS_NAME]);
+    if ($base[OID_SYS_UPTIME] === null && $base[OID_SYS_DESCR] === null) {
+        return r_fail('SNMP antwortet ohne Systemdaten');
+    }
+    $extra = [];
+    $up = (float) ($base[OID_SYS_UPTIME] ?? 0) / 100;
+    $extra['Laufzeit (Tage)'] = round($up / 86400, 2);
+    $cpu = null;
+    try {
+        $loads = array_values($c->walk(OID_HR_CPU, 256));
+        if ($loads) {
+            $cpu = round(array_sum($loads) / count($loads), 1);
+            $extra['CPU-Kerne'] = count($loads);
+        }
+    } catch (Throwable) {
+    }
+    if ($cpu === null) {
+        try {
+            $l = $c->getOne(OID_UCD_LOAD1);
+            if ($l !== null) {
+                $extra['Load 1m'] = (float) $l;
+                $memMsg = " · Load {$l}";
+            }
+        } catch (Throwable) {
+        }
+    }
+    $memMsg = '';
+    try {
+        $types = $c->walk(OID_HR_STO_TYPE, 200);
+        foreach ($types as $oid => $t) {
+            $i = substr($oid, strrpos($oid, '.') + 1);
+            $isRam = $t === '1.3.6.1.2.1.25.2.1.2';
+            $isDisk = $t === '1.3.6.1.2.1.25.2.1.4';
+            if (!$isRam && !$isDisk) {
+                continue;
+            }
+            $v = $c->get([OID_HR_STO_DESC . ".$i", OID_HR_STO_UNIT . ".$i", OID_HR_STO_SIZE . ".$i", OID_HR_STO_USED . ".$i"]);
+            $size = (float) $v[OID_HR_STO_SIZE . ".$i"];
+            if ($size <= 0) {
+                continue;
+            }
+            $pct = round((float) $v[OID_HR_STO_USED . ".$i"] / $size * 100, 1);
+            if ($isRam) {
+                $extra['RAM %'] = $pct;
+                $memMsg = sprintf(' · RAM %s%% von %.1f GB', $pct, $size * (float) $v[OID_HR_STO_UNIT . ".$i"] / 1073741824);
+            } elseif (count($extra) < 20) {
+                $name = mb_substr(trim((string) $v[OID_HR_STO_DESC . ".$i"]), 0, 24);
+                if (preg_match('#^/(dev|proc|run|sys)(/|$)#', $name) || $size * (float) $v[OID_HR_STO_UNIT . ".$i"] < 1e9) {
+                    continue;
+                }
+                $extra["Belegt {$name} %"] = $pct;
+            }
+        }
+    } catch (Throwable) {
+    }
+    try {
+        $states = $c->getOne(OID_PF_STATES);
+        if (is_numeric($states)) {
+            $extra['Firewall-States'] = (int) $states;
+        }
+    } catch (Throwable) {
+    }
+    $name = trim((string) ($base[OID_SYS_NAME] ?? ''));
+    $descr = mb_substr(trim(preg_replace('/\s+/', ' ', (string) ($base[OID_SYS_DESCR] ?? ''))), 0, 90);
+    $msg = ($name ? "{$name}: " : '') . ($cpu !== null ? "CPU {$cpu}%" : 'CPU n/v') . $memMsg . ' · Laufzeit ' . fmt_uptime($up) . ($descr ? " · {$descr}" : '');
+    return r_ok($cpu, '%', $msg, $extra);
+}
+
+/** Interface-Index anhand Index/Name/Beschreibung/Alias finden. */
+function snmp_find_if(SnmpClient $c, string $want): ?int
+{
+    $want = trim($want);
+    if ($want === '') {
+        return null;
+    }
+    if (ctype_digit($want)) {
+        return (int) $want;
+    }
+    foreach (snmp_interfaces($c) as $i => $if) {
+        foreach (['name', 'descr', 'alias'] as $k) {
+            if ($if[$k] !== '' && strcasecmp($if[$k], $want) === 0) {
+                return $i;
+            }
+        }
+    }
+    return null;
+}
+
+function check_snmp_traffic(string $host, array $cfg, array $sensor): array
+{
+    require_once __DIR__ . '/snmp.php';
+    $c = snmp_for($host, $cfg, $sensor);
+    $st = sensor_state($sensor);
+    $idx = isset($st['if']) && ($st['if_want'] ?? null) === ($cfg['interface'] ?? '') ? (int) $st['if'] : snmp_find_if($c, (string) ($cfg['interface'] ?? ''));
+    if (!$idx) {
+        return r_fail('Interface „' . ($cfg['interface'] ?? '') . '“ nicht gefunden – im Sensor „Interfaces laden“ nutzen');
+    }
+    $hc = $c->get([OID_IF_HC_IN . ".$idx", OID_IF_HC_OUT . ".$idx", OID_IF_HSPEED . ".$idx"]);
+    $in = $hc[OID_IF_HC_IN . ".$idx"];
+    $out = $hc[OID_IF_HC_OUT . ".$idx"];
+    $wrap = 18446744073709551616.0;
+    if ($in === null || $out === null) {
+        $lo = $c->get([OID_IF_IN . ".$idx", OID_IF_OUT . ".$idx"]);
+        $in = $lo[OID_IF_IN . ".$idx"];
+        $out = $lo[OID_IF_OUT . ".$idx"];
+        $wrap = 4294967296.0;
+    }
+    $meta = $c->get([OID_IF_OPER . ".$idx", OID_IF_DESCR . ".$idx"]);
+    if ($in === null) {
+        return r_fail("Interface {$idx} liefert keine Zähler");
+    }
+    $now = microtime(true);
+    $state = ['if' => $idx, 'if_want' => $cfg['interface'] ?? '', 'in' => (float) $in, 'out' => (float) $out, 't' => $now];
+    $speed = (float) ($hc[OID_IF_HSPEED . ".$idx"] ?? 0);
+    $linkUp = (int) ($meta[OID_IF_OPER . ".$idx"] ?? 1) === 1;
+    $name = (string) ($meta[OID_IF_DESCR . ".$idx"] ?? $idx);
+    if (!$linkUp && ($cfg['down_is_error'] ?? true)) {
+        $r = r_fail("Interface {$name}: Link down");
+        $r['state'] = $state;
+        return $r;
+    }
+    if (!isset($st['t']) || ($st['if'] ?? null) !== $idx || $now - (float) $st['t'] > 3600) {
+        $r = r_ok(null, 'Mbit/s', "Interface {$name}: erste Messung, Rate folgt bei nächster Prüfung");
+        $r['status'] = 'unknown';
+        $r['state'] = $state;
+        return $r;
+    }
+    $dt = max(1.0, $now - (float) $st['t']);
+    $d = function (float $cur, float $prev) use ($wrap): float {
+        $x = $cur - $prev;
+        return $x < 0 ? $x + $wrap : $x;
+    };
+    $rin = round($d((float) $in, (float) $st['in']) * 8 / $dt / 1e6, 3);
+    $rout = round($d((float) $out, (float) $st['out']) * 8 / $dt / 1e6, 3);
+    $sum = round($rin + $rout, 3);
+    $extra = ['Eingang Mbit/s' => $rin, 'Ausgang Mbit/s' => $rout];
+    if ($speed > 0) {
+        $extra['Auslastung %'] = round(max($rin, $rout) / $speed * 100, 1);
+        $extra['Link Mbit/s'] = $speed;
+    }
+    $r = r_ok($sum, 'Mbit/s', sprintf('%s: ↓ %s Mbit/s · ↑ %s Mbit/s%s', $name, $rin, $rout, $speed ? " · Link {$speed} Mbit/s" : ''), $extra);
+    $r['state'] = $state;
+    return $r;
+}
+
+function check_snmp_custom(string $host, array $cfg, array $sensor): array
+{
+    require_once __DIR__ . '/snmp.php';
+    $oid = trim((string) ($cfg['oid'] ?? ''), " .");
+    if (!preg_match('/^\d+(\.\d+)+$/', $oid)) {
+        return r_fail('Ungültige OID');
+    }
+    $c = snmp_for($host, $cfg, $sensor);
+    $v = $c->getOne($oid);
+    if ($v === null) {
+        return r_fail("OID {$oid} nicht vorhanden");
+    }
+    $unit = (string) ($cfg['unit'] ?? '');
+    $factor = (float) ($cfg['factor'] ?? 1) ?: 1.0;
+    if (!is_numeric($v)) {
+        return r_ok(null, $unit, 'Wert: ' . mb_substr((string) $v, 0, 200));
+    }
+    if (($cfg['mode'] ?? 'Wert') === 'Rate pro Sekunde') {
+        $st = sensor_state($sensor);
+        $now = microtime(true);
+        $state = ['v' => (float) $v, 't' => $now];
+        if (!isset($st['t'])) {
+            $r = r_ok(null, $unit, 'Erste Messung, Rate folgt');
+            $r['status'] = 'unknown';
+            $r['state'] = $state;
+            return $r;
+        }
+        $delta = (float) $v - (float) $st['v'];
+        if ($delta < 0) {
+            $delta += 4294967296.0;
+        }
+        $val = round($delta / max(1, $now - (float) $st['t']) * $factor, 3);
+        $r = r_ok($val, $unit, "{$val} {$unit}/s");
+        $r['state'] = $state;
+        return $r;
+    }
+    $val = round((float) $v * $factor, 3);
+    return r_ok($val, $unit, "{$val} {$unit}");
+}
+
+/* =============================================================== FRITZ!Box */
+
+function tr064_call(string $host, int $port, string $path, string $service, string $action, ?array $auth = null): ?array
+{
+    $body = '<?xml version="1.0" encoding="utf-8"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">'
+        . "<s:Body><u:{$action} xmlns:u=\"{$service}\"></u:{$action}></s:Body></s:Envelope>";
+    $target = str_contains($host, ':') ? "[{$host}]" : $host;
+    $ch = curl_init("http://{$target}:{$port}{$path}");
+    $opt = [
+        CURLOPT_POST => true, CURLOPT_POSTFIELDS => $body, CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT => 6, CURLOPT_CONNECTTIMEOUT => 4,
+        CURLOPT_HTTPHEADER => ['Content-Type: text/xml; charset="utf-8"', "SOAPAction: \"{$service}#{$action}\""],
+    ];
+    if ($auth && (($auth['user'] ?? '') !== '' || ($auth['pass'] ?? '') !== '')) {
+        $opt[CURLOPT_HTTPAUTH] = CURLAUTH_DIGEST;
+        $opt[CURLOPT_USERPWD] = ($auth['user'] ?? '') . ':' . ($auth['pass'] ?? '');
+    }
+    curl_setopt_array($ch, $opt);
+    $res = curl_exec($ch);
+    $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $err = curl_error($ch);
+    curl_close($ch);
+    if ($res === false) {
+        throw new RuntimeException('TR-064 nicht erreichbar: ' . $err);
+    }
+    if ($code === 401) {
+        throw new RuntimeException('TR-064: Anmeldung fehlgeschlagen (Benutzer/Passwort am Gerät prüfen)');
+    }
+    if ($code !== 200) {
+        return null;
+    }
+    if (!preg_match_all('#<(New[A-Za-z0-9_\-]+)>([^<]*)</\1>#', $res, $m, PREG_SET_ORDER)) {
+        return [];
+    }
+    $out = [];
+    foreach ($m as $x) {
+        $out[$x[1]] = html_entity_decode($x[2], ENT_QUOTES | ENT_XML1);
+    }
+    return $out;
+}
+
+function check_fritzbox(string $host, array $cfg, array $sensor): array
+{
+    if (!valid_host($host)) {
+        return r_fail('Kein gültiger Host am Gerät hinterlegt');
+    }
+    $port = (int) ($cfg['port'] ?? 49000) ?: 49000;
+    $cr = sensor_creds($sensor);
+    $auth = ['user' => (string) ($cr['username'] ?? ''), 'pass' => (string) ($cr['password'] ?? '')];
+    $hasAuth = $auth['user'] !== '' || $auth['pass'] !== '';
+    $extra = [];
+    $parts = [];
+    $value = null;
+    $status = 'up';
+
+    // Geräteinfo (benötigt Login)
+    if ($hasAuth) {
+        $di = tr064_call($host, $port, '/upnp/control/deviceinfo', 'urn:dslforum-org:service:DeviceInfo:1', 'GetInfo', $auth);
+        if ($di) {
+            $parts[] = trim(($di['NewModelName'] ?? 'FRITZ!Box') . ' · FRITZ!OS ' . ($di['NewSoftwareVersion'] ?? '?'));
+            if (isset($di['NewUpTime'])) {
+                $extra['Laufzeit (Tage)'] = round((int) $di['NewUpTime'] / 86400, 2);
+            }
+        }
+        $hn = tr064_call($host, $port, '/upnp/control/hosts', 'urn:dslforum-org:service:Hosts:1', 'GetHostNumberOfEntries', $auth);
+        if ($hn && isset($hn['NewHostNumberOfEntries'])) {
+            $extra['Bekannte Geräte'] = (int) $hn['NewHostNumberOfEntries'];
+        }
+    }
+
+    if ($cfg['check_wan'] ?? true) {
+        // UPnP-IGD-Schnittstelle (ohne Login, „Statusinformationen über UPnP übertragen“ muss aktiv sein)
+        $base = ['/igdupnp/control/WANCommonIFC1', 'urn:schemas-upnp-org:service:WANCommonInterfaceConfig:1'];
+        $addon = tr064_call($host, $port, $base[0], $base[1], 'GetAddonInfos');
+        $link = tr064_call($host, $port, $base[0], $base[1], 'GetCommonLinkProperties');
+        $ip = tr064_call($host, $port, '/igdupnp/control/WANIPConn1', 'urn:schemas-upnp-org:service:WANIPConnection:1', 'GetStatusInfo');
+        $ext = tr064_call($host, $port, '/igdupnp/control/WANIPConn1', 'urn:schemas-upnp-org:service:WANIPConnection:1', 'GetExternalIPAddress');
+        if ($addon === null && $ip === null) {
+            if (!$parts) {
+                return r_fail('Keine TR-064/UPnP-Daten. In der FRITZ!Box „Heimnetz › Netzwerk › Netzwerkeinstellungen › Zugriff für Anwendungen zulassen“ und „Statusinformationen über UPnP übertragen“ aktivieren.');
+            }
+            $parts[] = 'WAN-Status nicht abrufbar (UPnP-Statusinformationen deaktiviert?)';
+            $status = 'warning';
+        } else {
+            $conn = $ip['NewConnectionStatus'] ?? '?';
+            $extra['Online'] = $conn === 'Connected' ? 1 : 0;
+            if (isset($ip['NewUptime'])) {
+                $extra['Verbindung seit (h)'] = round((int) $ip['NewUptime'] / 3600, 1);
+            }
+            if ($addon) {
+                $down = round((float) ($addon['NewByteReceiveRate'] ?? 0) * 8 / 1e6, 3);
+                $up = round((float) ($addon['NewByteSendRate'] ?? 0) * 8 / 1e6, 3);
+                $extra['Download Mbit/s'] = $down;
+                $extra['Upload Mbit/s'] = $up;
+                $value = $down;
+            }
+            if ($link) {
+                $extra['Sync Download Mbit/s'] = round((float) ($link['NewLayer1DownstreamMaxBitRate'] ?? 0) / 1e6, 1);
+                $extra['Sync Upload Mbit/s'] = round((float) ($link['NewLayer1UpstreamMaxBitRate'] ?? 0) / 1e6, 1);
+                if (!empty($link['NewWANAccessType'])) {
+                    $parts[] = $link['NewWANAccessType'];
+                }
+            }
+            $parts[] = 'Internet: ' . ($conn === 'Connected' ? 'verbunden' : $conn) . (!empty($ext['NewExternalIPAddress']) ? ' · IP ' . $ext['NewExternalIPAddress'] : '');
+            if (isset($extra['Download Mbit/s'])) {
+                $parts[] = "↓ {$extra['Download Mbit/s']} / ↑ {$extra['Upload Mbit/s']} Mbit/s";
+            }
+            if ($conn !== 'Connected') {
+                $status = 'down';
+            }
+        }
+    }
+    if (!$parts && !$extra) {
+        return r_fail('FRITZ!Box antwortet nicht auf TR-064');
+    }
+    $r = r_ok($value, 'Mbit/s', implode(' · ', $parts), $extra);
+    $r['status'] = $status;
+    return $r;
 }
 
 /* ======================================================= Grenzwerte/Status */

@@ -11,6 +11,53 @@
   const ST = () => window.RM_STATUS_TEXT;
   const ORDER = ['down', 'warning', 'acked', 'unknown', 'up', 'paused'];
 
+  // Gerätevorlagen: Sensor-Sets für typische Geräte. {HOST} und {PORT} werden ersetzt.
+  const TEMPLATES = {
+    '': { label: '— keine Vorlage —', sensors: [{ type: 'ping', name: 'Ping' }] },
+    windows: { label: 'Windows-Server', icon: 'windows', sensors: [
+      { type: 'ping', name: 'Ping' }, { type: 'agent', name: 'Windows-Agent' },
+      { type: 'port', name: 'RDP (3389)', config: { port: 3389 } }, { type: 'port', name: 'SMB (445)', config: { port: 445 } }] },
+    dc: { label: 'Windows-Domänencontroller', icon: 'windows', sensors: [
+      { type: 'ping', name: 'Ping' }, { type: 'agent', name: 'Windows-Agent', config: { services: 'NTDS,DNS,Netlogon,KDC,W32Time' } },
+      { type: 'port', name: 'LDAP (389)', config: { port: 389 } }, { type: 'port', name: 'Kerberos (88)', config: { port: 88 } },
+      { type: 'dns', name: 'DNS-Dienst', config: { query: '{HOST}' } }] },
+    linux: { label: 'Linux-Server', icon: 'linux', sensors: [
+      { type: 'ping', name: 'Ping' }, { type: 'port', name: 'SSH (22)', config: { port: 22 } }, { type: 'snmp_system', name: 'SNMP System', optional: true }] },
+    pfsense: { label: 'pfSense / OPNsense', icon: 'firewall', param: { key: 'PORT', label: 'Web-Port', def: 4444 }, sensors: [
+      { type: 'ping', name: 'Ping' },
+      { type: 'http', name: 'Weboberfläche :{PORT}', config: { url: 'https://{HOST}:{PORT}/', verify_ssl: false, expect: '200-499' } },
+      { type: 'ssl', name: 'SSL-Zertifikat :{PORT}', config: { port: '{PORT}' } },
+      { type: 'snmp_system', name: 'SNMP System (CPU/RAM/States)' },
+      { type: 'snmp_custom', name: 'Firewall-States', config: { oid: '1.3.6.1.4.1.12325.1.200.1.3.1.0', unit: 'States' } }], web: 'https://{HOST}:{PORT}/' },
+    fritzbox: { label: 'FRITZ!Box (Internet-Router)', icon: 'fritzbox', sensors: [
+      { type: 'ping', name: 'Ping' }, { type: 'fritzbox', name: 'FRITZ!Box Status', config: { check_wan: true } },
+      { type: 'http', name: 'Weboberfläche', config: { url: 'http://{HOST}/', expect: '200-499' } }], web: 'http://{HOST}/' },
+    fritzrep: { label: 'FRITZ!Repeater / FRITZ!Box als IP-Client', icon: 'wifi', sensors: [
+      { type: 'ping', name: 'Ping' }, { type: 'fritzbox', name: 'FRITZ! Status', config: { check_wan: false } }], web: 'http://{HOST}/' },
+    switch: { label: 'Switch (SNMP)', icon: 'switch', sensors: [{ type: 'ping', name: 'Ping' }, { type: 'snmp_system', name: 'SNMP System' }] },
+    proxmox: { label: 'Proxmox VE', icon: 'hypervisor', sensors: [
+      { type: 'ping', name: 'Ping' }, { type: 'http', name: 'Proxmox-Weboberfläche', config: { url: 'https://{HOST}:8006/', verify_ssl: false } },
+      { type: 'ssl', name: 'SSL-Zertifikat :8006', config: { port: 8006 } }, { type: 'port', name: 'SSH (22)', config: { port: 22 } }], web: 'https://{HOST}:8006/' },
+    nas: { label: 'NAS (Synology/QNAP)', icon: 'nas', sensors: [
+      { type: 'ping', name: 'Ping' }, { type: 'http', name: 'DSM / Weboberfläche', config: { url: 'https://{HOST}:5001/', verify_ssl: false, expect: '200-499' } },
+      { type: 'port', name: 'SMB (445)', config: { port: 445 } }, { type: 'snmp_system', name: 'SNMP System', optional: true }], web: 'https://{HOST}:5001/' },
+    printer: { label: 'Drucker', icon: 'printer', sensors: [
+      { type: 'ping', name: 'Ping' }, { type: 'port', name: 'Druckport (9100)', config: { port: 9100 } },
+      { type: 'http', name: 'Weboberfläche', config: { url: 'http://{HOST}/', expect: '200-499' } }], web: 'http://{HOST}/' },
+    web: { label: 'Webseite / Webanwendung', icon: 'web', sensors: [
+      { type: 'http', name: 'HTTPS', config: { url: 'https://{HOST}/' } }, { type: 'ssl', name: 'SSL-Zertifikat', config: { port: 443 } }], web: 'https://{HOST}/' },
+  };
+  const fillTpl = (v, host, param) => (typeof v === 'string' ? v.replace(/\{HOST\}/g, host).replace(/\{PORT\}/g, param) : v);
+  function tplSensors(key, host, param) {
+    const t = TEMPLATES[key] || TEMPLATES[''];
+    return t.sensors.map((x) => {
+      const cfg = {};
+      for (const [k, v] of Object.entries(x.config || {})) cfg[k] = /^\{PORT\}$/.test(v) ? Number(param) : fillTpl(v, host, param);
+      return { type: x.type, name: fillTpl(x.name, host, param), config: cfg, optional: !!x.optional };
+    });
+  }
+  const sensorUrl = (d) => (d.creds && d.creds.web_url) || ((d.sensors || []).find((s) => s.url) || {}).url || '';
+
   const S = { boot: null, tree: null, counts: {}, heartbeat: 0, now: 0, view: null, editor: null, chart: null, drawerSensor: null, filter: '', search: '' };
 
   /* ------------------------------------------------------------ Helfer */
@@ -196,11 +243,12 @@
     const groupVisible = (g) => (!f && !q) || g.devices.some(deviceVisible) || g.groups.some(groupVisible);
 
     const sensorTile = (s, d) => `<button class="stile st-${s.status}" data-sensor="${s.id}" title="${esc(s.name + ': ' + (s.message || ''))}">
-        <span class="stile-n">${esc(s.icon)} ${esc(s.name)}</span><span class="stile-v">${esc(fmtVal(s) || ST()[s.status])}</span></button>`;
+        <span class="stile-n">${esc(s.icon)} ${esc(s.name)}${s.url ? `<span class="tlink" data-url="${esc(s.url)}" title="${esc(s.url)} öffnen">↗</span>` : ''}</span><span class="stile-v">${esc(fmtVal(s) || ST()[s.status])}</span></button>`;
     const devRow = (d) => `<div class="devrow st-${d.status}" data-device="${d.id}" draggable="${isAdmin()}">
         <div class="devhead">
           <span class="devico">${RM_ICONS.html(d.icon, 22)}</span>
           <div class="devname"><b>${esc(d.name)}</b><small>${esc(d.host || '')}${d.paused ? ' · pausiert' : ''}${d.depends_on ? ' · 🔗 abhängig' : ''}</small></div>
+          ${sensorUrl(d) ? `<a class="weblink" href="${esc(sensorUrl(d))}" target="_blank" rel="noopener" title="Weboberfläche öffnen">↗ Öffnen</a>` : ''}
           <span class="devcounts">${miniCounts(d.counts)}</span>
           ${isAdmin() ? `<span class="devact"><button class="ghost" data-act="add-sensor" data-id="${d.id}" title="Sensor hinzufügen">+ Sensor</button><button class="ghost" data-act="device-menu" data-id="${d.id}" title="Mehr">⋯</button></span>` : ''}
         </div>
@@ -224,7 +272,7 @@
     el.innerHTML = `<div class="page">
       <div class="pagehead"><h1>Geräte</h1>
         <div class="filters">${['', ...ORDER].map((k) => `<button class="fbtn${f === k ? ' on' : ''}" data-filter="${k}">${k ? dot(k) + ' ' + ST()[k] : 'Alle'}${k ? ` <b>${S.counts[k] || 0}</b>` : ''}</button>`).join('')}</div>
-        <div class="actions">${isAdmin() ? '<button class="btn" data-act="add-group">+ Gruppe</button><button class="btn primary" data-act="add-device">+ Gerät</button>' : ''}</div></div>
+        <div class="actions">${isAdmin() ? '<button class="btn" data-act="scan">🔍 Netzwerk scannen</button><button class="btn" data-act="add-group">+ Gruppe</button><button class="btn primary" data-act="add-device">+ Gerät</button>' : ''}</div></div>
       ${q ? `<p class="muted">Suche: „${esc(q)}“ <a href="#" data-act="clear-search">zurücksetzen</a></p>` : ''}
       <div class="tree">${S.tree ? grp(S.tree, 0) : ''}</div></div>`;
   }
@@ -273,7 +321,7 @@
     walk((t, o, p, d) => {
       if (t === 'group') idx.group[o.id] = { name: o.name, status: o.status, counts: o.counts };
       if (t === 'device') idx.device[o.id] = { name: o.name, host: o.host, status: o.status, counts: o.counts };
-      if (t === 'sensor') idx.sensor[o.id] = { name: o.name, device: d.name, status: o.status, value: o.value, unit: o.unit, message: o.message };
+      if (t === 'sensor') idx.sensor[o.id] = { name: o.name, device: d.name, status: o.status, value: o.value, unit: o.unit, message: o.message, channels: o.channels };
     });
     return idx;
   }
@@ -301,6 +349,7 @@
       data: m.data, name: m.name, refresh: m.refresh_s, readonly: !isAdmin(),
       startMode: m.id && params.get('edit') !== '1' ? 'view' : 'edit',
       objects: S.tree, status: statusIndexFromTree(),
+      deviceIcon: (id) => { const r = findDevice(id); return r ? r.d.icon : null; },
       fetchStatus: () => api('status').then((j) => j.index),
       renderShare: shareHtml,
       onOpenObject: (b) => {
@@ -342,7 +391,7 @@
 
   /* ===================================================== Einstellungen */
   async function viewSettings(el, sub) {
-    const tabs = [['notifications', 'Benachrichtigungen'], ['users', 'Benutzer'], ['system', 'System'], ['account', 'Mein Konto']];
+    const tabs = [['notifications', 'Benachrichtigungen'], ['users', 'Benutzer'], ['icons', 'Icons'], ['system', 'System'], ['account', 'Mein Konto']];
     el.innerHTML = `<div class="page"><div class="pagehead"><h1>Einstellungen</h1></div>
       <div class="subtabs">${tabs.map(([k, l]) => `<a href="#/settings/${k}" class="${sub === k ? 'on' : ''}">${l}</a>`).join('')}</div><div id="setBox"></div></div>`;
     const box = $('#setBox');
@@ -384,6 +433,27 @@
         const fd = Object.fromEntries(new FormData(ev.target));
         try { await api('settings_save', fd); toast('Gespeichert'); } catch (e) { fail(e); }
       });
+    } else if (sub === 'icons') {
+      const builtin = Object.entries(RM_ICONS.icons);
+      const custom = S.boot.icons || [];
+      box.innerHTML = `<div class="card"><div class="cardhead"><h2>Eigene Icons</h2></div>
+        <p class="muted">SVG, PNG, JPG oder WebP hochladen (max. ~300 KB, ideal quadratisch, transparenter Hintergrund). Danach im Gerät und in den Maps auswählbar.</p>
+        ${isAdmin() ? `<form id="iconForm" class="row wrap"><input name="name" placeholder="Name, z. B. Synology DS920+" required><input type="file" name="file" accept=".svg,.png,.jpg,.jpeg,.webp,.gif,image/*" required><button class="btn primary">Hochladen</button></form>` : ''}
+        <div class="icongrid">${custom.map((c) => `<div class="iconcell"><img src="${esc(c.data)}" alt=""><span>${esc(c.name)}</span>${isAdmin() ? `<button class="ghost danger" data-act="icon-del" data-id="${c.id}">Löschen</button>` : ''}</div>`).join('') || '<p class="empty">Noch keine eigenen Icons.</p>'}</div></div>
+        <div class="card"><h2>Mitgelieferte Icons (${builtin.length})</h2><div class="icongrid">${builtin.map(([k, v]) => `<div class="iconcell"><span class="ico">${RM_ICONS.html(k, 34)}</span><span>${esc(v.label)}</span></div>`).join('')}</div></div>`;
+      const fm = $('#iconForm');
+      if (fm) fm.addEventListener('submit', async (ev) => {
+        ev.preventDefault();
+        const file = fm.file.files[0];
+        if (!file) return;
+        if (file.size > 300000) { toast('Datei zu groß (max. 300 KB)', 'err'); return; }
+        const data = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(file); });
+        try {
+          await api('icon_save', { name: fm.name.value, data });
+          S.boot = await api('bootstrap'); RM_ICONS.registerCustom(S.boot.icons);
+          toast('Icon gespeichert'); route();
+        } catch (e) { fail(e); }
+      });
     } else if (sub === 'account') {
       box.innerHTML = `<form class="card narrow" id="pwForm"><h2>Passwort ändern</h2>
         <label class="f"><span>Aktuelles Passwort</span><input type="password" name="old" required autocomplete="current-password"></label>
@@ -413,7 +483,12 @@
     const range = S.range || 86400;
     const uptime = s.stats24 && s.stats24.n ? Math.round((s.stats24.ok / s.stats24.n) * 1000) / 10 : null;
     const lim = [['warn_max', 'Warnung über'], ['err_max', 'Fehler über'], ['warn_min', 'Warnung unter'], ['err_min', 'Fehler unter']].filter(([k]) => s[k] !== null).map(([k, l]) => `${l} ${fmt(s[k])}`).join(' · ');
-    const pushUrl = s.type === 'push' ? new URL('push.php?token=' + s.push_token, location.href).href : '';
+    const pushUrl = s.type === 'push' && s.push_token ? new URL('push.php?token=' + s.push_token, location.href).href : '';
+    const agentUrl = s.type === 'agent' && s.push_token ? new URL('agent.php?token=' + s.push_token, location.href).href : '';
+    const tr = findSensor(s.id);
+    const webUrl = (tr && tr.s.url) || (tr && tr.d.creds && tr.d.creds.web_url) || '';
+    const chans = Object.entries(s.channels || {}).filter(([, v]) => typeof v === 'number');
+    if (S.chartSensor !== s.id) { S.chartChannel = ''; S.chartSensor = s.id; }
     const inner = $('#drawerInner');
     const wasOpen = !$('#drawer').hidden && soft;
     inner.innerHTML = `
@@ -428,6 +503,7 @@
           ${isAdmin() ? `<button class="btn sm" data-act="pause" data-obj="sensor" data-id="${s.id}" data-p="${+s.paused ? 0 : 1}">${+s.paused ? '▶ Fortsetzen' : '⏸ Pausieren'}</button>
           <button class="btn sm" data-act="edit-sensor" data-id="${s.id}">✎ Bearbeiten</button>
           <button class="btn sm danger" data-act="del-sensor" data-id="${s.id}">Löschen</button>` : ''}
+          ${webUrl ? `<a class="btn sm" href="${esc(webUrl)}" target="_blank" rel="noopener">↗ Öffnen</a>` : ''}
         </div>
         <div class="bigval"><span class="v t-${st}">${s.last_value !== null ? fmt(+s.last_value) : '–'}</span><span class="u">${esc(s.last_unit || '')}</span></div>
         <p class="dmsg">${esc(s.last_message || 'Noch keine Messung')}</p>
@@ -439,17 +515,27 @@
           ${lim ? `<dt>Grenzwerte</dt><dd>${lim}</dd>` : ''}
           ${Object.entries(s.channels || {}).map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(fmt(v))}</dd>`).join('')}
         </dl>
+        ${agentUrl ? `<div class="pushbox agentbox"><b>🪟 Windows-Agent installieren</b>
+          <ol><li><a href="${esc(agentUrl)}">ReloadAgent.ps1 herunterladen</a> (enthält Server-Adresse und Token) und per Rechtsklick „Mit PowerShell ausführen“ – oder</li>
+          <li>in einer <b>Administrator-PowerShell</b> auf dem Server einfügen:</li></ol>
+          <textarea readonly rows="3" onclick="this.select()">iwr -UseBasicParsing '${esc(agentUrl)}' -OutFile "$env:TEMP\\ReloadAgent.ps1"; powershell -ExecutionPolicy Bypass -File "$env:TEMP\\ReloadAgent.ps1"</textarea>
+          <small>Installiert sich nach <code>C:\\ProgramData\\ReloadAgent</code> als geplante Aufgabe (SYSTEM). Status: <code>C:\\ProgramData\\ReloadAgent\\ReloadAgent.ps1 -Status</code>, Test: <code>-Test</code>, Entfernen: <code>-Uninstall</code>. Der Server muss ${esc(location.host)} per HTTPS erreichen.</small></div>` : ''}
         ${pushUrl ? `<div class="pushbox"><b>Push-URL</b><input readonly value="${esc(pushUrl)}&value=42&status=up&msg=OK" onclick="this.select()"><small>Parameter: <code>value</code> (Zahl), <code>status</code> up|warning|down, <code>msg</code> Text. Bleibt die Meldung länger als das Intervall aus, geht der Sensor auf Fehler.</small></div>` : ''}
-        <div class="chartbox"><div class="ranges">${[[3600, '1 h'], [86400, '24 h'], [604800, '7 T'], [2592000, '30 T']].map(([r, l]) => `<button class="fbtn${r === range ? ' on' : ''}" data-act="range" data-r="${r}">${l}</button>`).join('')}</div><div class="chartwrap"><canvas id="sensorChart"></canvas></div></div>
+        <div class="chartbox"><div class="ranges">${[[3600, '1 h'], [86400, '24 h'], [604800, '7 T'], [2592000, '30 T']].map(([r, l]) => `<button class="fbtn${r === range ? ' on' : ''}" data-act="range" data-r="${r}">${l}</button>`).join('')}</div>
+          ${chans.length ? `<div class="ranges chans"><button class="fbtn${!S.chartChannel ? ' on' : ''}" data-act="chan" data-c="">Hauptwert</button>${chans.map(([k]) => `<button class="fbtn${S.chartChannel === k ? ' on' : ''}" data-act="chan" data-c="${esc(k)}">${esc(k)}</button>`).join('')}</div>` : ''}<div class="chartwrap"><canvas id="sensorChart"></canvas></div></div>
         <h3>Ereignisse</h3>${eventsTable(s.events || [])}
       </div>`;
     $('#drawer').hidden = false;
     if (!wasOpen) $('#drawer').scrollTop = 0;
-    drawChart(s, range);
+    drawChart(s, range, S.chartChannel || '');
   }
 
-  async function drawChart(s, range) {
-    const j = await api('history', undefined, { id: s.id, range }).catch(() => null);
+  async function drawChart(s, range, channel) {
+    const j = await api('history', undefined, channel ? { id: s.id, range, channel } : { id: s.id, range }).catch(() => null);
+    if (channel) {
+      const last = channel.split(' ').pop();
+      s = Object.assign({}, s, { name: channel, last_unit: /^(%|Mbit\/s|GB|MB|ms|h|Tage|States)$/.test(last) ? last : '', warn_max: null, err_max: null, warn_min: null, err_min: null });
+    }
     const cv = $('#sensorChart');
     if (!j || !cv || typeof Chart === 'undefined') return;
     if (S.chart) S.chart.destroy();
@@ -488,7 +574,9 @@
     if (!r) return;
     const d = r.d;
     $('#drawerInner').innerHTML = `<div class="dhead st-${d.status}"><div><small>${esc(r.path.filter((x) => x.kind !== 'root').map((x) => x.name).join(' › '))}</small><h2>${RM_ICONS.html(d.icon, 22)} ${esc(d.name)}</h2><span class="badge inv">${ST()[d.status]}</span></div><button class="iconbtn light" data-act="close-drawer">✕</button></div>
-      <div class="dbody"><p class="muted">${esc(d.host || '')}</p>${d.notes ? `<p class="notes">${esc(d.notes)}</p>` : ''}
+      <div class="dbody"><p class="muted">${esc(d.host || '')}</p>
+      <div class="dactions">${sensorUrl(d) ? `<a class="btn sm" href="${esc(sensorUrl(d))}" target="_blank" rel="noopener">↗ Weboberfläche öffnen</a>` : ''}${isAdmin() ? `<button class="btn sm" data-act="edit-device" data-id="${d.id}">✎ Bearbeiten</button><button class="btn sm" data-act="add-sensor" data-id="${d.id}">+ Sensor</button>` : ''}</div>
+      ${d.notes ? `<p class="notes">${esc(d.notes)}</p>` : ''}
       <table class="tbl">${d.sensors.map((s) => `<tr class="clickable" data-sensor="${s.id}"><td>${dot(s.status)}</td><td>${esc(s.icon)} ${esc(s.name)}<div class="sub">${esc(s.message || '')}</div></td><td class="right nowrap">${esc(fmtVal(s))}</td></tr>`).join('')}</table></div>`;
     S.drawerSensor = null;
     $('#drawer').hidden = false;
@@ -497,7 +585,7 @@
   /* =========================================================== Modals */
   function modal(html, onSubmit, opts = {}) {
     const m = $('#modal');
-    m.className = 'modal' + (opts.wide ? ' wide' : '');
+    m.className = 'modal' + (opts.wide ? ' wide' : '') + (opts.xwide ? ' xwide' : '');
     m.innerHTML = html;
     $('#modalBack').hidden = false;
     const form = $('form', m);
@@ -545,36 +633,69 @@
     async (f) => { await api('group_save', { id, name: f.name.value, parent_id: f.parent_id ? f.parent_id.value : null }); toast('Gruppe gespeichert'); await reload(); });
   }
 
+  function iconPicker(sel) {
+    return `<div class="iconpick">${Object.entries(RM_ICONS.all()).map(([k, v]) => `<label title="${esc(v.label)}"><input type="radio" name="icon" value="${esc(k)}"${sel === k ? ' checked' : ''}>${RM_ICONS.html(k, 26)}</label>`).join('')}
+      ${isAdmin() ? '<a href="#/settings/icons" class="iconadd" title="Eigene Icons hochladen" data-act="close-modal-go">＋</a>' : ''}</div>`;
+  }
+
+  function sensorChecks(list) {
+    return list.map((s) => `<label class="check"><input type="checkbox" ${s.optional ? '' : 'checked'} data-sensor='${esc(JSON.stringify({ type: s.type, name: s.name, config: s.config || {} }))}'> ${esc((S.boot.types[s.type] || {}).icon || '')} ${esc(s.name)} ${s.info ? `<small class="muted">${esc(s.info)}</small>` : ''}${s.optional ? ' <small class="muted">(optional – braucht SNMP/Agent)</small>' : ''}</label>`).join('');
+  }
+
   function deviceForm(id, groupId) {
     const r = id ? findDevice(id) : null;
-    const d = r ? r.d : { name: '', host: '', icon: 'server', notes: '', depends_on: null };
+    const d = r ? r.d : { name: '', host: '', icon: 'server', notes: '', depends_on: null, creds: {} };
+    const c = d.creds || {};
     const gid = r ? r.path[r.path.length - 1].id : (groupId || 2);
-    const icons = Object.entries(RM_ICONS.icons);
     const sensors = allSensors();
-    modal(`<form class="devform"><h2>${id ? 'Gerät bearbeiten' : 'Neues Gerät'}</h2>
+    const m = modal(`<form class="devform"><h2>${id ? 'Gerät bearbeiten' : 'Neues Gerät'}</h2>
       <div class="grid2"><label class="f"><span>Name</span><input name="name" required value="${esc(d.name)}" placeholder="z. B. Core-Switch"></label>
       <label class="f"><span>Host / IP-Adresse</span><div class="row"><input name="host" value="${esc(d.host)}" placeholder="192.168.1.1 oder server.example.com">${id ? '' : '<button type="button" class="btn" data-act="discover">🔍 Erkennen</button>'}</div></label></div>
+      ${id ? '' : `<div class="grid2"><label class="f"><span>Vorlage</span><select name="tpl">${Object.entries(TEMPLATES).map(([k, t]) => opt(k, t.label, '')).join('')}</select></label>
+        <label class="f" id="tplParam" hidden><span>Web-Port</span><input name="tplparam" type="number" value="4444"></label></div>`}
       <div class="grid2"><label class="f"><span>Gruppe</span><select name="group_id">${allGroups().map((x) => opt(x.id, x.name, gid)).join('')}</select></label>
-      <label class="f"><span>Abhängig von (Master-Sensor)</span><select name="depends_on"><option value="">— keine —</option>${sensors.map((s) => opt(s.id, s.name, d.depends_on)).join('')}</select></label></div>
-      <div class="f"><span>Icon</span><div class="iconpick">${icons.map(([k, v]) => `<label title="${esc(v.label)}"><input type="radio" name="icon" value="${k}"${d.icon === k ? ' checked' : ''}>${RM_ICONS.html(k, 26)}</label>`).join('')}</div></div>
+      <label class="f"><span>Abhängig von (Master-Sensor)</span><select name="depends_on"><option value="">— keine —</option>${sensors.map((x) => opt(x.id, x.name, d.depends_on)).join('')}</select></label></div>
+      <label class="f"><span>Weboberfläche (Link zum Öffnen, optional)</span><input name="web_url" value="${esc(c.web_url || '')}" placeholder="https://192.168.1.1:4444/"></label>
+      <div class="f"><span>Icon</span>${iconPicker(d.icon)}</div>
+      <details class="credbox"${c.snmp_community || c.username ? ' open' : ''}><summary>Zugangsdaten (SNMP, FRITZ!Box-Login)</summary>
+        <div class="grid4"><label class="f"><span>SNMP-Community</span><input name="snmp_community" value="${esc(c.snmp_community || '')}" placeholder="public"></label>
+        <label class="f"><span>SNMP-Version</span><select name="snmp_version">${opt(2, 'v2c', c.snmp_version || 2)}${opt(1, 'v1', c.snmp_version || 2)}</select></label>
+        <label class="f"><span>SNMP-Port</span><input name="snmp_port" type="number" value="${esc(c.snmp_port || 161)}"></label><span></span></div>
+        <div class="grid2"><label class="f"><span>Benutzer (z. B. FRITZ!Box)</span><input name="username" value="${esc(c.username || '')}" autocomplete="off"></label>
+        <label class="f"><span>Passwort ${c.has_password ? '(gespeichert – leer lassen = unverändert)' : ''}</span><input name="password" type="password" autocomplete="new-password"></label></div>
+        <p class="muted small">Gilt für alle Sensoren dieses Geräts. Das Passwort wird nie an den Browser zurückgegeben.</p></details>
       <label class="f"><span>Notizen</span><textarea name="notes" rows="2">${esc(d.notes)}</textarea></label>
-      ${id ? '' : `<div class="f"><span>Sensoren anlegen</span><div id="discList" class="disclist">
-        <label class="check"><input type="checkbox" data-sensor='{"type":"ping","name":"Ping","config":{}}' checked> 📶 Ping</label>
-        <p class="muted small">Tipp: „Erkennen“ prüft gängige Ports (SSH, HTTP/S, RDP, SMB, DB …) und schlägt passende Sensoren vor.</p></div></div>`}
+      ${id ? '' : `<div class="f"><span>Sensoren anlegen</span><div id="discList" class="disclist">${sensorChecks(TEMPLATES[''].sensors)}
+        <p class="muted small">Vorlage wählen oder „Erkennen“ klicken: prüft Ping, ~30 Ports und Web-Titel und schlägt passende Sensoren vor.</p></div></div>`}
       <div class="mfoot"><button type="button" class="btn" data-act="close-modal">Abbrechen</button><button class="btn primary">Speichern</button></div></form>`,
     async (f) => {
-      const add = $$('#discList input[type=checkbox]:checked', f).map((c) => JSON.parse(c.dataset.sensor));
+      const add = $$('#discList input[type=checkbox]:checked', f).map((x) => JSON.parse(x.dataset.sensor));
       const icon = (f.querySelector('input[name=icon]:checked') || {}).value || 'server';
-      const r2 = await api('device_save', { id, name: f.name.value, host: f.host.value.trim(), group_id: f.group_id.value, depends_on: f.depends_on.value, notes: f.notes.value, icon, add_sensors: add });
+      const creds = { snmp_community: f.snmp_community.value.trim(), snmp_version: f.snmp_version.value, snmp_port: f.snmp_port.value, username: f.username.value.trim(), password: f.password.value, web_url: f.web_url.value.trim() };
+      const r2 = await api('device_save', { id, name: f.name.value, host: f.host.value.trim(), group_id: f.group_id.value, depends_on: f.depends_on.value, notes: f.notes.value, icon, creds, add_sensors: add });
       toast(id ? 'Gerät gespeichert' : 'Gerät angelegt');
       await reload();
       if (!id && add.length) {
-        // neue Sensoren sofort einmal prüfen lassen
         const nd = findDevice(r2.id);
-        if (nd) for (const s of nd.d.sensors) api('sensor_check', { id: s.id }).catch(() => {});
-        setTimeout(reload, 4000);
+        if (nd) for (const x of nd.d.sensors) if (!['push', 'agent'].includes(x.type)) api('sensor_check', { id: x.id }).catch(() => {});
+        setTimeout(reload, 5000);
       }
     }, { wide: true });
+    if (!id) {
+      const f = $('form', m);
+      const applyTpl = () => {
+        const k = f.tpl.value;
+        const t = TEMPLATES[k];
+        $('#tplParam', m).hidden = !t.param;
+        const host = f.host.value.trim() || '{HOST}';
+        $('#discList', m).innerHTML = sensorChecks(tplSensors(k, host, f.tplparam.value || 4444)) + (k && !f.host.value.trim() ? '<p class="muted small">Host eintragen – {HOST} wird beim Speichern ersetzt.</p>' : '');
+        if (t.icon) { const r3 = f.querySelector(`input[name=icon][value="${t.icon}"]`); if (r3) r3.checked = true; }
+        if (t.web && !f.web_url.value) f.web_url.value = fillTpl(t.web, f.host.value.trim(), f.tplparam.value || 4444);
+      };
+      f.tpl.addEventListener('change', applyTpl);
+      f.tplparam.addEventListener('input', applyTpl);
+      f.host.addEventListener('change', () => { if (f.tpl.value) { f.web_url.value = ''; applyTpl(); } });
+    }
   }
 
   async function discover(btn) {
@@ -585,11 +706,88 @@
     try {
       const j = await api('discover', { host });
       const list = $('#discList', f);
-      list.innerHTML = j.found.length ? j.found.map((s) => `<label class="check"><input type="checkbox" checked data-sensor='${esc(JSON.stringify({ type: s.type, name: s.name, config: s.config }))}'> ${esc(S.boot.types[s.type].icon)} ${esc(s.name)} <small class="muted">${esc(s.info)}</small></label>`).join('')
+      const mt = j.meta;
+      list.innerHTML = j.found.length ? (mt ? `<p class="discmeta"><b>${esc(mt.type)}</b>${mt.vendor ? ' · ' + esc(mt.vendor) : ''}${mt.ports.length ? ' · Dienste: ' + esc(mt.ports.join(', ')) : ''}</p>` : '') + sensorChecks(j.found)
         : '<p class="muted">Nichts gefunden (Host antwortet nicht auf Ping / gängige Ports). Sensoren kannst du später manuell anlegen.</p>';
-      if (!f.name.value) f.name.value = host;
+      if (mt) {
+        if (!f.name.value) f.name.value = mt.name || host;
+        if (mt.web_url && !f.web_url.value) f.web_url.value = mt.web_url;
+        const r = f.querySelector(`input[name=icon][value="${mt.icon}"]`);
+        if (r) r.checked = true;
+      } else if (!f.name.value) f.name.value = host;
     } catch (e) { fail(e); }
     btn.disabled = false; btn.textContent = '🔍 Erkennen';
+  }
+
+  /* ---------------------------------------------------------- Netzwerk-Scan */
+  function scanDialog() {
+    let last = '';
+    try { last = localStorage.getItem('rm_scan') || ''; } catch (e) { /* egal */ }
+    const m = modal(`<div class="scanbox"><h2>🔍 Netzwerk scannen</h2>
+      <p class="muted">Ping-Sweep, ~30 Ports, Hostnamen, MAC/Hersteller und Web-Titel. Erkennt FRITZ!Box, pfSense, Windows, Linux, Proxmox, NAS, Drucker … und schlägt passende Sensoren vor.</p>
+      <form id="scanForm"><div class="grid2"><label class="f"><span>Netze / Bereiche</span><input name="targets" required value="${esc(last)}" placeholder="192.168.1.0/24, 10.0.0.1-50"></label>
+        <label class="f"><span>Neue Geräte in Gruppe</span><select name="group_id">${allGroups().map((x) => opt(x.id, x.name, 2)).join('')}</select></label></div>
+        <div class="grid2"><label class="f"><span>SNMP-Community für neue Geräte (optional)</span><input name="community" placeholder="z. B. public"></label>
+        <div class="f"><span>Optionen</span><label class="check"><input type="checkbox" name="deep"> Gründlich: auch Geräte ohne Ping-Antwort (Windows-Firewall), langsamer</label>
+        <label class="check"><input type="checkbox" name="optional"> Optionale Sensoren (SNMP / Windows-Agent) mit anlegen</label></div></div>
+        <button class="btn primary" id="scanBtn">Scan starten</button> <span id="scanState" class="muted"></span></form>
+      <div id="scanRes"></div>
+      <div class="mfoot"><button type="button" class="btn" data-act="close-modal">Schließen</button><button type="button" class="btn primary" id="scanAdd" hidden>Ausgewählte hinzufügen</button></div></div>`, null, { wide: true, xwide: true });
+    let hosts = [];
+    const f = $('#scanForm', m);
+    const upd = () => {
+      const n = $$('#scanRes input.pick:checked', m).length;
+      const b = $('#scanAdd', m);
+      b.hidden = !hosts.length; b.disabled = !n; b.textContent = `${n} Gerät(e) hinzufügen`;
+    };
+    f.addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      try { localStorage.setItem('rm_scan', f.targets.value); } catch (e) { /* egal */ }
+      $('#scanBtn', m).disabled = true;
+      const t0 = Date.now();
+      const tick = setInterval(() => { $('#scanState', m).textContent = `⏳ Scanne … ${Math.round((Date.now() - t0) / 1000)} s`; }, 500);
+      try {
+        const j = await api('scan', { targets: f.targets.value, deep: f.deep.checked });
+        hosts = j.hosts;
+        $('#scanState', m).textContent = `${hosts.length} Gerät(e) gefunden von ${j.scanned} Adressen (${Math.round((Date.now() - t0) / 1000)} s)`;
+        $('#scanRes', m).innerHTML = hosts.length ? `<div class="scanwrap"><table class="tbl scantbl"><thead><tr><th><input type="checkbox" id="pickAll"></th><th>Name</th><th>Adresse</th><th>Typ</th><th>Hersteller / MAC</th><th>Dienste</th><th></th></tr></thead><tbody>
+          ${hosts.map((h, i) => `<tr class="${h.exists ? 'exists' : ''}"><td><input type="checkbox" class="pick" data-i="${i}"${h.exists ? '' : ' checked'}></td>
+            <td><input class="hname" data-i="${i}" value="${esc(h.name)}">${h.exists ? `<div class="sub">bereits vorhanden: ${esc(h.exists)}</div>` : ''}</td>
+            <td class="nowrap"><b>${esc(h.ip)}</b>${h.hostname ? `<div class="sub">${esc(h.hostname)}</div>` : ''}${h.ping !== null ? `<div class="sub">${h.ping} ms</div>` : '<div class="sub">kein Ping</div>'}</td>
+            <td class="nowrap"><span class="ico">${RM_ICONS.html(h.icon, 20)}</span> ${esc(h.type)}${h.title ? `<div class="sub">${esc(h.title)}</div>` : ''}</td>
+            <td>${esc(h.vendor || '')}<div class="sub">${esc(h.mac || '')}</div></td>
+            <td class="ports">${h.port_names.map((p) => `<span class="tag">${esc(p)}</span>`).join(' ')}</td>
+            <td>${h.web_url ? `<a href="${esc(h.web_url)}" target="_blank" rel="noopener">↗</a>` : ''}</td></tr>`).join('')}</tbody></table></div>` : '<p class="empty">Keine Geräte gefunden.</p>';
+        const all = $('#pickAll', m);
+        if (all) all.addEventListener('change', () => { $$('#scanRes input.pick', m).forEach((x) => { x.checked = all.checked; }); upd(); });
+        $$('#scanRes input.pick', m).forEach((x) => x.addEventListener('change', upd));
+        upd();
+      } catch (e) { $('#scanState', m).textContent = ''; fail(e); }
+      clearInterval(tick);
+      $('#scanBtn', m).disabled = false;
+    });
+    $('#scanAdd', m).addEventListener('click', async () => {
+      const picks = $$('#scanRes input.pick:checked', m).map((x) => +x.dataset.i);
+      const b = $('#scanAdd', m);
+      b.disabled = true;
+      let ok = 0;
+      for (const i of picks) {
+        const h = hosts[i];
+        const name = ($(`#scanRes input.hname[data-i="${i}"]`, m).value || h.name).trim();
+        const sensors = h.sensors.filter((x) => !x.optional || f.optional.checked).map((x) => ({ type: x.type, name: x.name, config: x.config }));
+        b.textContent = `Lege an … ${ok + 1}/${picks.length}`;
+        try {
+          await api('device_save', { name, host: h.ip, group_id: f.group_id.value, icon: h.icon, notes: [h.type, h.vendor, h.mac, h.hostname].filter(Boolean).join(' · '),
+            creds: { snmp_community: f.community.value.trim(), web_url: h.web_url || '' }, add_sensors: sensors });
+          ok++;
+          $(`#scanRes input.pick[data-i="${i}"]`, m).closest('tr').classList.add('exists');
+          $(`#scanRes input.pick[data-i="${i}"]`, m).checked = false;
+        } catch (e) { fail(e); }
+      }
+      toast(`${ok} Gerät(e) angelegt – Prüfung startet innerhalb einer Minute`);
+      await reload();
+      upd();
+    });
   }
 
   async function sensorForm(id, deviceId, presetType) {
@@ -609,6 +807,10 @@
       <div class="grid2"><label class="f"><span>Name</span><input name="name" value="${esc(s ? s.name : '')}" placeholder="${esc(t.label)}"></label>
       <label class="f"><span>Prüfintervall</span><select name="interval_s">${[[10, '10 Sekunden'], [30, '30 Sekunden'], [60, '1 Minute'], [120, '2 Minuten'], [300, '5 Minuten'], [600, '10 Minuten'], [900, '15 Minuten'], [3600, '1 Stunde'], [21600, '6 Stunden'], [86400, '24 Stunden']].map(([v, l]) => opt(v, l, s ? s.interval_s : t.interval)).join('')}</select></label></div>
       ${t.fields.map((f) => fieldHtml(f, cfg[f.key])).join('')}
+      ${type === 'snmp_traffic' ? `<div class="f"><button type="button" class="btn" data-act="load-ifs" data-dev="${s ? s.device_id : deviceId}">📋 Interfaces vom Gerät laden</button><div id="ifList" class="iflist"></div></div>` : ''}
+      ${type === 'agent' ? '<p class="muted small">Nach dem Speichern in den Sensor-Details den Agenten herunterladen und auf dem Windows-Server ausführen.</p>' : ''}
+      ${['snmp_system', 'snmp_traffic', 'snmp_custom'].includes(type) ? '<p class="muted small">SNMP-Community/Version werden am Gerät hinterlegt (Gerät bearbeiten › Zugangsdaten). pfSense: Dienste › SNMP aktivieren, Module „MibII“, „Host Resources“, „pf“ anhaken, Firewall-Regel für UDP 161 vom Monitor erlauben.</p>' : ''}
+      ${type === 'fritzbox' ? '<p class="muted small">FRITZ!Box: Heimnetz › Netzwerk › Netzwerkeinstellungen › „Zugriff für Anwendungen zulassen“ und „Statusinformationen über UPnP übertragen“ aktivieren. Für Modell, Laufzeit und Geräteanzahl Benutzer/Passwort am Gerät hinterlegen.</p>' : ''}
       <fieldset class="limits"><legend>Grenzwerte (${esc(t.unit || 'Wert')}) – leer = aus</legend><div class="grid4">
         <label class="f"><span>Warnung über</span><input name="warn_max" type="number" step="any" value="${lim('warn_max')}"></label>
         <label class="f"><span>Fehler über</span><input name="err_max" type="number" step="any" value="${lim('err_max')}"></label>
@@ -677,9 +879,13 @@
     const a = ev.target.closest('[data-act]');
     if (!ev.target.closest('.popmenu') && !ev.target.closest('[data-act$="-menu"]')) $$('.popmenu').forEach((p) => p.remove());
     if (!ev.target.closest('.usermenu')) $('#userMenu').hidden = true;
+    const urlEl = ev.target.closest('[data-url]');
+    if (urlEl) { ev.preventDefault(); ev.stopPropagation(); window.open(urlEl.dataset.url, '_blank', 'noopener'); return; }
     if (!a) {
       const sens = ev.target.closest('[data-sensor]');
       if (sens && !ev.target.closest('.me')) { ev.preventDefault(); openSensor(+sens.dataset.sensor); return; }
+      const ifb = ev.target.closest('[data-ifname]');
+      if (ifb) { const f = ifb.closest('form'); f.cfg_interface.value = ifb.dataset.ifname; if (!f.name.value) f.name.value = 'Traffic ' + ifb.dataset.ifname; $$('.ifbtn', f).forEach((x) => x.classList.toggle('on', x === ifb)); return; }
       const g = ev.target.closest('[data-goto]');
       if (g) location.hash = g.dataset.goto;
       const fb = ev.target.closest('[data-filter]');
@@ -694,6 +900,20 @@
       switch (act) {
         case 'close-drawer': closeDrawer(); break;
         case 'close-modal': closeModal(); break;
+        case 'close-modal-go': closeModal(); location.hash = a.getAttribute('href'); break;
+        case 'scan': scanDialog(); break;
+        case 'chan': S.chartChannel = a.dataset.c; if (S.drawerSensor) openSensor(S.drawerSensor, true); break;
+        case 'icon-del': if (confirm('Icon löschen? Geräte damit erhalten wieder das Server-Icon.')) { await api('icon_delete', { id }); S.boot = await api('bootstrap'); RM_ICONS.registerCustom(S.boot.icons); await reload(); route(); } break;
+        case 'load-ifs': {
+          a.disabled = true; a.textContent = '⏳ Lade …';
+          try {
+            const f = a.closest('form');
+            const j = await api('snmp_interfaces', { device_id: +a.dataset.dev, community: f.cfg_community ? f.cfg_community.value : '' });
+            $('#ifList').innerHTML = j.interfaces.map((x) => `<button type="button" class="ifbtn${x.up ? ' up' : ''}" data-ifname="${esc(x.name || x.descr)}"><b>${esc(x.name || x.descr)}</b> <small>${esc(x.alias || (x.descr !== x.name ? x.descr : ''))} · #${x.index} · ${x.up ? 'up' : 'down'}${x.speed ? ' · ' + x.speed + ' Mbit/s' : ''}</small></button>`).join('') || '<p class="muted">Keine Interfaces gefunden.</p>';
+          } catch (e) { fail(e); }
+          a.disabled = false; a.textContent = '📋 Interfaces vom Gerät laden';
+          break;
+        }
         case 'add-group': groupForm(null); break;
         case 'add-device': deviceForm(null, a.dataset.group ? +a.dataset.group : null); break;
         case 'add-sensor': sensorForm(null, id); break;
@@ -799,6 +1019,7 @@
   (async function init() {
     try {
       S.boot = await api('bootstrap');
+      RM_ICONS.registerCustom(S.boot.icons);
       await loadTree();
       route();
       scheduleRefresh();

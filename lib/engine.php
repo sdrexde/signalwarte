@@ -41,7 +41,9 @@ function effective_status(array $s, array $pausedGroups = []): string
     return $s['status'];
 }
 
-const SENSOR_SELECT = 'SELECT s.*, d.host, d.name AS device_name, d.paused AS device_paused, d.group_id, d.depends_on
+const PUSH_TYPES = ['push', 'agent'];
+
+const SENSOR_SELECT = 'SELECT s.*, d.host, d.name AS device_name, d.paused AS device_paused, d.group_id, d.depends_on, d.creds
     FROM sensors s JOIN devices d ON d.id = s.device_id';
 
 function sensor_row(int $id): ?array
@@ -68,7 +70,7 @@ function sensor_store_result(array $s, array $r, bool $fromLimits = true): void
     if ($raw === 'down') {
         $fail++;
         // Wie bei PRTG: erster Fehlschlag => Warnung + schneller Neuversuch.
-        if ($fail === 1 && $s['status'] !== 'down' && $s['type'] !== 'push') {
+        if ($fail === 1 && $s['status'] !== 'down' && !in_array($s['type'], PUSH_TYPES, true)) {
             $r['status'] = 'warning';
             $r['message'] = 'Neuer Versuch … ' . $r['message'];
             $next = $now + min(20, max(10, (int) $s['interval_s']));
@@ -81,8 +83,13 @@ function sensor_store_result(array $s, array $r, bool $fromLimits = true): void
         ->execute([$s['id'], $now, $r['status'], $r['value'], $r['extra'] ? json_encode($r['extra'], JSON_UNESCAPED_UNICODE) : null]);
 
     $changed = $r['status'] !== $s['status'];
-    $sql = 'UPDATE sensors SET status = ?, fail_count = ?, last_value = ?, last_unit = ?, last_message = ?, last_check = ?, next_check = ?';
-    $args = [$r['status'], $fail, $r['value'], $r['unit'], mb_substr((string) $r['message'], 0, 500), $now, $next];
+    $sql = 'UPDATE sensors SET status = ?, fail_count = ?, last_value = ?, last_unit = ?, last_message = ?, last_check = ?, next_check = ?, last_channels = ?';
+    $args = [$r['status'], $fail, $r['value'], $r['unit'], mb_substr((string) $r['message'], 0, 500), $now, $next,
+        $r['extra'] ? json_encode($r['extra'], JSON_UNESCAPED_UNICODE) : null];
+    if (array_key_exists('state', $r)) {
+        $sql .= ', state = ?';
+        $args[] = $r['state'] === null ? null : json_encode($r['state']);
+    }
     if ($changed) {
         $sql .= ', status_since = ?, acked = 0, ack_msg = NULL';
         $args[] = $now;
@@ -113,8 +120,8 @@ function sensor_run(array $s): array
             return ['status' => $s['status'], 'message' => 'Pausiert durch Abhängigkeit'];
         }
     }
-    if ($s['type'] === 'push') {
-        $r = r_fail('Keine Push-Daten seit ' . ($s['last_check'] ? date('d.m. H:i:s', (int) $s['last_check']) : 'Anlage'));
+    if (in_array($s['type'], PUSH_TYPES, true)) {
+        $r = r_fail(($s['type'] === 'agent' ? 'Agent meldet sich nicht – letzte Meldung ' : 'Keine Push-Daten seit ') . ($s['last_check'] ? date('d.m. H:i:s', (int) $s['last_check']) : 'Anlage'));
         sensor_store_result($s, $r, false);
         return $r;
     }
@@ -147,6 +154,8 @@ function build_tree(): array
             'last_check' => $s['last_check'] ? (int) $s['last_check'] : null,
             'since' => $s['status_since'] ? (int) $s['status_since'] : null,
             'interval' => (int) $s['interval_s'],
+            'channels' => $s['last_channels'] ? (json_decode($s['last_channels'], true) ?: []) : [],
+            'url' => sensor_web_url($s),
         ];
     }
     $devByGroup = [];
@@ -155,6 +164,7 @@ function build_tree(): array
         $paused = (int) $d['paused'] || isset($pg[(int) $d['group_id']]);
         $devByGroup[(int) $d['group_id']][] = [
             'id' => (int) $d['id'], 'name' => $d['name'], 'host' => $d['host'], 'icon' => $d['icon'],
+            'creds' => device_creds_public($d['creds'] ?? '{}'),
             'notes' => $d['notes'], 'paused' => (bool) $d['paused'],
             'depends_on' => $d['depends_on'] ? (int) $d['depends_on'] : null,
             'status' => $paused ? 'paused' : worst_status(array_column($ss, 'status')),
@@ -193,6 +203,37 @@ function build_tree(): array
     return ['root' => $root ? $mk($root) : null, 'counts' => $counts];
 }
 
+/** Öffnenbare Web-Adresse eines Sensors (HTTP-Sensoren, Web-Ports). */
+function sensor_web_url(array $s): ?string
+{
+    $cfg = json_decode((string) $s['config'], true) ?: [];
+    $host = (string) ($s['host'] ?? '');
+    if (in_array($s['type'], ['http', 'http_json'], true)) {
+        $u = trim((string) ($cfg['url'] ?? ''));
+        if ($u === '' && $s['type'] === 'http' && $host !== '') {
+            $u = 'http://' . $host . '/';
+        }
+        return preg_match('#^https?://#i', $u) ? $u : null;
+    }
+    $web = [80 => 'http', 443 => 'https', 4444 => 'https', 5000 => 'http', 5001 => 'https', 8006 => 'https', 8080 => 'http', 8123 => 'http', 8443 => 'https'];
+    $port = (int) ($cfg['port'] ?? 0);
+    if (in_array($s['type'], ['port', 'ssl'], true) && isset($web[$port]) && $host !== '') {
+        return $web[$port] . '://' . (str_contains($host, ':') ? "[{$host}]" : $host) . ($port === 80 || $port === 443 ? '' : ":{$port}") . '/';
+    }
+    return null;
+}
+
+/** Zugangsdaten für die Oberfläche – Passwort wird nie ausgeliefert. */
+function device_creds_public(string $json): array
+{
+    $c = json_decode($json, true) ?: [];
+    if (!empty($c['password'])) {
+        $c['password'] = '';
+        $c['has_password'] = true;
+    }
+    return $c;
+}
+
 function count_states(array $sensors): array
 {
     $c = ['down' => 0, 'warning' => 0, 'acked' => 0, 'unknown' => 0, 'up' => 0, 'paused' => 0];
@@ -220,6 +261,7 @@ function status_index(): array
                 $out['sensor'][$s['id']] = [
                     'name' => $s['name'], 'device' => $d['name'], 'status' => $s['status'],
                     'value' => $s['value'], 'unit' => $s['unit'], 'message' => $s['message'],
+                    'channels' => $s['channels'],
                 ];
             }
         }

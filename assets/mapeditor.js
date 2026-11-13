@@ -176,7 +176,7 @@
       };
       this.palItems = {
         shapes: SHAPES,
-        icons: Object.entries(RM_ICONS.icons).map(([k, v]) => ({ kind: 'icon', icon: k, label: v.label, w: 64, h: 64 })),
+        icons: Object.entries(RM_ICONS.all()).map(([k, v]) => ({ kind: 'icon', icon: k, label: v.label, w: 64, h: 64 })),
         misc: [
           { kind: 'image', label: 'Bild (URL)', w: 160, h: 100 },
           { kind: 'link', label: 'Link-Kachel', w: 140, h: 44 },
@@ -191,7 +191,7 @@
     previewSvg(it) {
       const n = Object.assign({ x: 4, y: 4, w: 40, h: 28, style: defaultStyle(it.kind), label: '' }, clone(it));
       n.w = 40; n.h = it.kind === 'icon' ? 32 : 28; n.label = '';
-      if (it.kind === 'icon') return `<svg viewBox="0 0 48 48" width="34" height="34" style="color:#1e5fa8">${RM_ICONS.icons[it.icon].svg}</svg>`;
+      if (it.kind === 'icon') return `<svg viewBox="0 0 48 48" width="34" height="34" style="color:#1e5fa8">${RM_ICONS.inner(it.icon)}</svg>`;
       if (it.kind === 'text') return '<svg viewBox="0 0 48 36" width="40" height="30"><text x="24" y="24" text-anchor="middle" font-size="18" font-family="serif" fill="#334155">Tt</text></svg>';
       if (it.kind === 'image') return '<svg viewBox="0 0 48 36" width="40" height="30"><rect x="4" y="4" width="40" height="28" rx="2" fill="#eef2f7" stroke="#94a3b8"/><path d="M8 28l10-12 8 9 5-5 9 8z" fill="#94a3b8"/><circle cx="34" cy="12" r="3" fill="#94a3b8"/></svg>';
       if (it.kind === 'link') return '<svg viewBox="0 0 48 36" width="40" height="30"><rect x="3" y="8" width="42" height="20" rx="5" fill="#1e5fa8"/><text x="24" y="22" text-anchor="middle" font-size="10" fill="#fff" font-family="sans-serif">Link ↗</text></svg>';
@@ -349,7 +349,7 @@
         if (status) g += `<rect x="${x - 3}" y="${y - 3}" width="${w + 6}" height="${h + 6}" rx="12" fill="none" stroke="${STATUS_COLOR[status]}" stroke-width="3"${status === 'down' ? ' class="me-pulse"' : ''}/>`;
         const pad = Math.min(w, h) * 0.14;
         const color = st.statusFill && status ? '#fff' : (st.iconColor || '#1e5fa8');
-        g += `<svg x="${x + pad}" y="${y + pad}" width="${w - 2 * pad}" height="${h - 2 * pad}" viewBox="0 0 48 48" color="${esc(color)}" style="color:${esc(color)}" overflow="visible">${(RM_ICONS.icons[n.icon] || RM_ICONS.icons.server).svg.replace(/currentColor/g, esc(color))}</svg>`;
+        g += `<svg x="${x + pad}" y="${y + pad}" width="${w - 2 * pad}" height="${h - 2 * pad}" viewBox="0 0 48 48" color="${esc(color)}" style="color:${esc(color)}" overflow="visible">${RM_ICONS.inner(n.icon, esc(color))}</svg>`;
         if (status) {
           const r = Math.max(6, Math.min(w, h) * 0.13);
           g += `<circle cx="${x + w - 2}" cy="${y + 2}" r="${r}" fill="${STATUS_COLOR[status]}" stroke="#fff" stroke-width="2"/>`;
@@ -366,9 +366,15 @@
         g += `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${st.radius ?? 8}" fill="${esc(bg)}" stroke="${esc(st.stroke)}" stroke-width="${st.strokeWidth ?? 1}" filter="url(#me-shadow)"/>`;
         g += `<rect x="${x}" y="${y}" width="7" height="${h}" rx="3" fill="${c}"/>`;
         const fs = st.fontSize || 12;
-        const title = label || (info ? info.name : '');
+        const title = label || (info ? info.name + (n.channel ? ' · ' + n.channel : '') : '');
         let sub = '';
-        if (n.bind && n.bind.type === 'sensor' && info) sub = `${fmtNum(info.value)}${info.unit ? ' ' + info.unit : ''}`;
+        if (n.bind && n.bind.type === 'sensor' && info) {
+          if (n.channel && info.channels && info.channels[n.channel] !== undefined) {
+            const last = n.channel.split(' ').pop();
+            sub = `${fmtNum(info.channels[n.channel])}${/^(%|Mbit\/s|GB|MB|ms|h|Tage|States)$/.test(last) ? ' ' + last : ''}`;
+          }
+          else sub = `${fmtNum(info.value)}${info.unit ? ' ' + info.unit : ''}`;
+        }
         else if (info && info.counts) {
           const c2 = info.counts;
           sub = ['down', 'warning', 'up', 'paused'].filter((k) => c2[k]).map((k) => `${c2[k]}× ${STATUS_TEXT[k]}`).join(' · ') || STATUS_TEXT[status];
@@ -682,11 +688,14 @@
           const i = this.bindInfo(n.bind);
           h += `<p class="me-st"><i style="background:${STATUS_COLOR[i.status]}"></i>${STATUS_TEXT[i.status]}${i.message ? ' – ' + esc(i.message) : ''}</p>`;
           h += f('Füllung nach Status', chk('statusFill', st.statusFill));
+          if (n.kind === 'status' && n.bind.type === 'sensor' && i.channels && Object.keys(i.channels).length) {
+            h += f('Angezeigter Wert', `<select data-p="node.channel"><option value="">Hauptwert</option>${Object.keys(i.channels).map((c) => `<option value="${esc(c)}"${n.channel === c ? ' selected' : ''}>${esc(c)}</option>`).join('')}</select>`);
+          }
         }
         h += '<h4>Darstellung</h4>';
         if (n.kind === 'shape') h += f('Form', sel('shape', n.shape, [['rect', 'Rechteck'], ['rounded', 'Abgerundet'], ['ellipse', 'Ellipse'], ['diamond', 'Raute'], ['hexagon', 'Sechseck'], ['cylinder', 'Zylinder'], ['cloud', 'Wolke']], 'node'));
         if (n.kind === 'icon') {
-          h += f('Icon', sel('icon', n.icon, Object.entries(RM_ICONS.icons).map(([k, v]) => [k, v.label]), 'node'));
+          h += f('Icon', sel('icon', n.icon, Object.entries(RM_ICONS.all()).map(([k, v]) => [k, v.label]), 'node'));
           h += `<div class="me-grid2">${f('Icon-Farbe', color('iconColor', st.iconColor))}${f('Hintergrund', `<span class="me-row">${color('fill', st.fill === 'none' ? '#ffffff' : st.fill)}<button data-clear="style.fill" title="Kein Hintergrund">⌀</button></span>`)}</div>`;
         }
         if (n.kind === 'image') h += f('Bild-URL', `<input data-p="src" value="${esc(n.src || '')}" placeholder="https://…/plan.png">`);
@@ -754,7 +763,12 @@
           else {
             const [t, id] = value.split(':');
             o.bind = { type: t, id: parseInt(id, 10) };
-            if (o.kind && !o.label && this.status[t][id]) o.label = this.status[t][id].name;
+            const info = this.status[t] && this.status[t][id];
+            // Element übernimmt sofort den Namen des verknüpften Objekts (bei Status-Kacheln kommt er automatisch)
+            if (info && o.kind && o.kind !== 'status') o.label = info.name;
+            if (info && o.kind === 'status') o.label = '';
+            // Gerät verknüpft → passendes Icon übernehmen
+            if (info && t === 'device' && o.kind === 'icon' && this.opts.deviceIcon) { const ic = this.opts.deviceIcon(parseInt(id, 10)); if (ic) o.icon = ic; }
           }
         } else if (['x', 'y', 'w', 'h'].includes(a)) o[a] = Math.max(a === 'w' || a === 'h' ? 8 : -1e6, parseFloat(value) || 0);
         else set(o, a, value);

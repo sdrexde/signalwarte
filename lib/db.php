@@ -32,6 +32,7 @@ function db_migrate(PDO $pdo): void
 {
     $ver = (int) $pdo->query('PRAGMA user_version')->fetchColumn();
     if ($ver >= 1) {
+        db_migrate_more($pdo, $ver);
         return;
     }
     $pdo->exec(<<<SQL
@@ -129,4 +130,29 @@ function db_migrate(PDO $pdo): void
     INSERT INTO groups(id, parent_id, name, kind) VALUES (2, 1, 'Lokale Probe', 'probe');
     PRAGMA user_version = 1;
     SQL);
+    db_migrate_more($pdo, 1);
+}
+
+/** Inkrementelle Migrationen ab Version 1. */
+function db_migrate_more(PDO $pdo, int $ver): void
+{
+    if ($ver < 2) {
+        $pdo->exec(<<<SQL
+        ALTER TABLE sensors ADD COLUMN state TEXT;          -- Zustand zwischen Prüfungen (z. B. Zählerstände)
+        ALTER TABLE sensors ADD COLUMN last_channels TEXT;  -- letzte Kanalwerte als JSON
+        ALTER TABLE devices ADD COLUMN creds TEXT NOT NULL DEFAULT '{}'; -- SNMP-Community, Login …
+        PRAGMA user_version = 2;
+        SQL);
+    }
+    if ($ver < 3) {
+        $pdo->exec(<<<SQL
+        CREATE TABLE IF NOT EXISTS icons (
+            id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL,
+            data TEXT NOT NULL,          -- data:-URI (SVG/PNG/JPG/WebP)
+            created_at INTEGER NOT NULL
+        );
+        PRAGMA user_version = 3;
+        SQL);
+    }
 }

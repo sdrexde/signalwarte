@@ -9,8 +9,13 @@ PHP 8 + SQLite + Vanilla JS, keine Build-Tools, kein Framework.
 
 - **Objektbaum wie PRTG:** Root → Probe → Gruppen (beliebig tief) → Geräte → Sensoren → Kanäle
 - **Status-Logik wie PRTG:** Fehler / Warnung / bestätigt / unbekannt / OK / pausiert, schlimmster Status vererbt sich nach oben, Retry (1. Fehlschlag = Warnung, 2. = Fehler), Warn-/Fehlergrenzen, Abhängigkeiten (Master-Sensor), Alarme bestätigen, Pausieren
-- **Sensortypen:** Ping, HTTP(S) (Statuscode, Schlüsselwort), TCP-Port, DNS, SSL-Zertifikatslaufzeit, HTTP-JSON-Wert (beliebige API), HTTP-Push (Gerät meldet sich selbst), CPU / RAM / Speicherplatz der Probe
-- **Auto-Discovery:** Host eingeben → Ping + 20 gängige Ports werden geprüft und passende Sensoren vorgeschlagen
+- **Sensortypen:** Ping, HTTP(S) (Statuscode, Schlüsselwort), TCP-Port, DNS, SSL-Zertifikatslaufzeit, HTTP-JSON-Wert (beliebige API), HTTP-Push, **SNMP System** (CPU/RAM/Laufwerke/Laufzeit/pf-States), **SNMP Traffic** (Interface ein/aus, Auslastung, Link), **SNMP Wert (OID)**, **FRITZ!Box (TR-064)**, **Windows-Agent**, CPU / RAM / Speicherplatz der Probe
+- **Netzwerkscanner:** Netze (z. B. `192.168.1.0/24, 10.0.0.1-50`) scannen → Ping, ~30 Ports, Hostname, MAC/Hersteller, Web-Titel → Gerätetyp wird erkannt (FRITZ!Box, pfSense/OPNsense, Windows, DC, Linux, Proxmox, NAS, Drucker …) und Geräte mit passenden Sensoren per Klick übernommen
+- **Gerätevorlagen:** Windows-Server, Domänencontroller, Linux, pfSense (Web-Port frei wählbar, z. B. 4444), FRITZ!Box, FRITZ!Repeater, Switch, Proxmox, NAS, Drucker, Webseite
+- **Auto-Discovery** für einzelne Hosts (gleiche Erkennung wie der Scanner)
+- **Weboberflächen per Klick öffnen:** HTTP(S)-Sensoren und Web-Ports haben ein ↗, Geräte einen „Öffnen“-Button (eigene URL hinterlegbar)
+- **Kanäle:** alle Zusatzwerte eines Sensors (z. B. Download/Upload, RAM %, Frei C: %) mit eigenem Verlauf; in Maps als Wert einer Status-Kachel wählbar
+- **Icons:** über 45 mitgelieferte Geräte-Icons + **eigene Icons hochladen** (SVG/PNG/JPG/WebP)
 - **Graphen** (1 h / 24 h / 7 T / 30 T) mit Grenzwert-Linien, Verfügbarkeit, Ø/Min/Max
 - **Benachrichtigungen:** E-Mail, Telegram, Webhook (JSON), ntfy-Push – je für Fehler / Warnung / wieder OK
 - **Maps (draw.io-Bedienung):** Formen, Zonen, 20 Netzwerk-Icons, Geräte/Gruppen/Sensoren per Drag & Drop mit Live-Status, Verbinder (gerade/orthogonal/kurvig) mit Wegpunkten, Linien färben sich nach Status (zweifarbig wie PRTG), Zoom/Pan, Raster & Hilfslinien, Mehrfachauswahl, Ausrichten/Verteilen, Undo/Redo, Copy/Paste, Export PNG/SVG/JSON, **öffentlicher Link für NOC-Wand**
@@ -31,6 +36,10 @@ Ausführliche PRTG-Recherche (Aufbau, Status, Maps, Map Designer, Gegenüberstel
 | Map-Editor (Bearbeiten) | Gerät anlegen mit Auto-Discovery |
 | ![Sensortypen](docs/screenshots/10-sensortypen.png) | ![Maps](docs/screenshots/05-maps-liste.png) |
 | Sensortypen | Maps-Übersicht |
+| ![Scanner](docs/screenshots/11-netzwerkscan.png) | ![Windows-Agent](docs/screenshots/14-windows-agent.png) |
+| Netzwerkscanner | Windows-Agent mit Kanälen |
+| ![SNMP](docs/screenshots/13-snmp-interfaces.png) | ![Icons](docs/screenshots/15-icons.png) |
+| SNMP-Interfaces laden | Eigene Icons |
 
 ## Aufbau
 
@@ -42,9 +51,12 @@ map.php          öffentliche Live-Map (Token-Link, ohne Login)
 public.php       Daten für öffentliche Maps (nur Objekte der Map)
 setup.php        Ersteinrichtung (Admin + optional Beispieldaten), danach gesperrt
 login.php / logout.php
+agent.php        liefert den Windows-Agenten mit eingesetzter URL + Token aus
+agent/           ReloadAgent.ps1 (Vorlage, per .htaccess gesperrt)
 cron/poller.php  Probe: prüft fällige Sensoren parallel (pcntl_fork), per Cron jede Minute
-lib/             bootstrap (Config/Auth/Helfer), db (Schema), sensors (Typen + Prüfungen),
-                 engine (Status/Baum/Retry), notify (Benachrichtigungen)
+lib/             bootstrap (Config/Auth/Helfer), db (Schema + Migrationen), sensors (Typen + Prüfungen),
+                 engine (Status/Baum/Retry), notify (Benachrichtigungen), snmp (SNMP v1/v2c in reinem PHP),
+                 scanner (Netzwerkscanner + Geräteerkennung)
 assets/          app.js (Oberfläche), mapeditor.js (Map-Editor), icons.js, app.css
 data/            SQLite-Datenbank (nicht im Git, per .htaccess gesperrt)
 ```
@@ -77,6 +89,41 @@ Manueller Poller-Test: `sudo -u www-data php cron/poller.php --once --verbose`
 cd /var/www/html/maik/monitor && git pull && chown -R www-data:www-data .
 ```
 
+## Windows-Server (Agent)
+
+Wie bei Spurwerk: Sensor **„Windows-Agent“** am Gerät anlegen (oder Vorlage „Windows-Server“ / „Domänencontroller“) →
+in den Sensor-Details **ReloadAgent.ps1 herunterladen** (Server-Adresse + Token sind eingesetzt) → auf dem Server
+per Rechtsklick „Mit PowerShell ausführen“ oder den angezeigten Einzeiler in einer Administrator-PowerShell einfügen.
+
+Der Agent installiert sich nach `C:\ProgramData\ReloadAgent`, läuft als geplante Aufgabe unter SYSTEM und meldet:
+CPU %, RAM %, freier Speicher je Laufwerk (% und GB), Laufzeit, Prozesse, gestoppte Auto-Dienste, überwachte Dienste
+(im Sensor eintragen, z. B. `NTDS,DNS,MSSQLSERVER`), Neustart ausstehend, Fehler in der Ereignisanzeige (1 h),
+Tage seit letztem Update, Defender-Status/Signaturalter, Netzwerk ein/aus. Grenzen für Laufwerke im Sensor einstellbar.
+
+```powershell
+C:\ProgramData\ReloadAgent\ReloadAgent.ps1 -Status     # Zustand + Log
+C:\ProgramData\ReloadAgent\ReloadAgent.ps1 -Test       # Werte anzeigen und senden
+C:\ProgramData\ReloadAgent\ReloadAgent.ps1 -Uninstall  # entfernen
+```
+
+## pfSense / OPNsense (SNMP)
+
+pfSense: **Services › SNMP** aktivieren, Community setzen, Module *MibII*, *Host Resources* und *pf* anhaken, an das
+LAN-Interface binden und eine Firewall-Regel für **UDP 161** vom Monitor-Server erlauben. Im Monitor die Community am Gerät
+(Zugangsdaten) hinterlegen und die Vorlage **pfSense** nutzen (Web-Port z. B. 4444). Traffic-Sensoren: Sensor
+„SNMP Traffic“ → „Interfaces vom Gerät laden“ → WAN/LAN wählen.
+
+## FRITZ!Box (TR-064)
+
+In der FRITZ!Box **Heimnetz › Netzwerk › Netzwerkeinstellungen**: „Zugriff für Anwendungen zulassen“ und
+„Statusinformationen über UPnP übertragen“ aktivieren. Damit liefert der Sensor Internet-Status, externe IP, aktuelle
+Up-/Download-Rate und Sync-Raten. Mit Benutzer/Passwort am Gerät zusätzlich Modell, FRITZ!OS-Version, Laufzeit und
+Anzahl bekannter Geräte. Repeater/IP-Client: Vorlage „FRITZ!Repeater“ (ohne Internet-Prüfung).
+
+> Hinweis: Der Monitor muss die Geräte im Netz erreichen (SNMP UDP 161, TR-064 TCP 49000). Für Standorte ohne direkte
+> Verbindung: VPN/Routing oder (geplant) Remote-Probe. Der Windows-Agent funktioniert überall, wo der Server den
+> Monitor per HTTPS erreicht.
+
 ## HTTP-Push
 
 Push-Sensoren bekommen eine eigene URL (in den Sensor-Details sichtbar):
@@ -90,7 +137,7 @@ Kommt innerhalb des Intervalls keine Meldung, geht der Sensor auf **Fehler** –
 
 ## Roadmap
 
-- SNMP (Traffic, Interfaces, Systemwerte), WMI/SSH-Sensoren
+- SNMPv3, Linux-Agent, SSH-Sensoren
 - Remote-Probes (eigener Poller an anderem Standort, meldet an den Core)
 - Map-Rotation, Graph-/Tabellen-Elemente in Maps, Hintergrundbild-Upload
 - Berichte (PDF), Wartungsfenster, Benachrichtigungs-Verzögerung/Eskalation
