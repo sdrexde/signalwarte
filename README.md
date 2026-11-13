@@ -83,6 +83,55 @@ Die App läuft in jedem Unterordner (Session-Cookie-Pfad wird automatisch ermitt
 
 Manueller Poller-Test: `sudo -u www-data php cron/poller.php --once --verbose`
 
+### Eigener LXC (empfohlen für Netzwerk-Monitoring)
+
+Damit der Monitor alle Netze erreicht, am besten auf einem eigenen LXC/VM betreiben und diesen in der Firewall freischalten.
+
+**1. LXC anlegen** (Proxmox): Debian 13, 1 vCPU, 512 MB–1 GB RAM, 4 GB Disk, feste IP. Unprivilegiert reicht.
+
+**2. Code holen** – auf dem LXC einen Deploy-Key erzeugen und auf GitHub eintragen (Settings › Deploy keys, *ohne* Schreibrecht):
+
+```bash
+apt-get update && apt-get install -y git
+ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_ed25519 && cat ~/.ssh/id_ed25519.pub   # → als Deploy-Key eintragen
+# falls Port 22 nach außen gesperrt ist: SSH über Port 443
+printf 'Host github.com\n  HostName ssh.github.com\n  Port 443\n' >> ~/.ssh/config
+git clone git@github.com:sdrexde/prtg_reload.git /var/www/reload-monitor
+```
+
+**3. Daten vom alten Server sichern und kopieren**
+
+```bash
+# alter Server
+bash /var/www/html/maik/monitor/tools/backup.sh /root/reload-monitor.sqlite
+scp /root/reload-monitor.sqlite root@<LXC-IP>:/root/
+```
+
+**4. Installieren** (Apache, PHP, vHost auf `/`, Cron, Rechte, ping für www-data, Datenübernahme):
+
+```bash
+bash /var/www/reload-monitor/install/install.sh --import /root/reload-monitor.sqlite
+```
+
+Ohne `--import` startet eine leere Installation mit Ersteinrichtung.
+
+**5. Danach**
+- Reverse-Proxy (z. B. HAProxy) auf die LXC-IP Port 80 zeigen lassen (HTTPS terminiert am Proxy). Wichtig: Der Proxy muss
+  `X-Forwarded-Proto: https` setzen, sonst bekommen Windows-Agenten eine http-URL.
+- Windows-Agenten: Bleibt die Adresse (z. B. nexus.sdrex.de/monitor → neue Domain), müssen sie neu heruntergeladen werden,
+  sonst melden sie weiter an die alte URL. Gleiche URL beibehalten = nichts zu tun.
+- Alten Server abschalten: `rm /etc/cron.d/reload-monitor` (sonst prüfen beide).
+
+**6. Firewall (pfSense)** – Alias `Monitor` = LXC-IP, auf allen Interfaces mit zu überwachenden Netzen erlauben:
+
+| Quelle | Ziel | Port | Zweck |
+|---|---|---|---|
+| Monitor | überwachte Netze | ICMP Echo | Ping, Netzwerkscan |
+| Monitor | überwachte Netze | TCP (beliebig oder Port-Alias) | Port-/HTTP(S)-Sensoren, Scan, TR-064 (49000) |
+| Monitor | überwachte Netze + This Firewall | UDP 161 | SNMP |
+| Monitor | This Firewall | TCP 4444 | pfSense-Weboberfläche |
+| Windows-Server | Monitor-URL | TCP 443 | Windows-Agent |
+
 ### Update per Deploy-Key
 
 ```bash
