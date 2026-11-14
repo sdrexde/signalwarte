@@ -133,7 +133,8 @@
       try {
         await loadTree(true);
         if (!document.hidden && $('#modalBack').hidden) {
-          if (['home', 'devices', 'alarms'].includes(S.view)) route(true);
+          const editing = S.view === 'agents' && document.querySelector('.agentspage details[open], .agentspage textarea:focus');
+          if (['home', 'devices', 'alarms', 'agents'].includes(S.view) && !editing) route(true);
         }
         if (S.drawerSensor && !$('#drawer').hidden) openSensor(S.drawerSensor, true);
       } catch (e) { /* still */ }
@@ -165,6 +166,7 @@
       else if (v === 'maps' && parts[1]) { if (!soft) viewMapEditor(el, parts[1], params); }
       else if (v === 'maps') viewMaps(el);
       else if (v === 'log') viewLog(el, params);
+      else if (v === 'agents') viewAgents(el);
       else if (v === 'settings') viewSettings(el, parts[1] || 'notifications');
       else if (v === 'sensor') { location.hash = '#/devices'; openSensor(+parts[1]); }
       else el.innerHTML = '<div class="page"><h1>Nicht gefunden</h1></div>';
@@ -364,6 +366,60 @@
       },
     });
     window.onbeforeunload = () => (S.editor && S.editor.dirty ? 'Ungespeicherte Änderungen' : undefined);
+  }
+
+  /* ========================================================== Agenten */
+  async function viewAgents(el) {
+    if (!el.firstElementChild || !el.querySelector('.agentspage')) el.innerHTML = '<div class="page agentspage"><div class="pagehead"><h1>Agenten</h1></div><p class="muted">Lade …</p></div>';
+    const j = await api('agents').catch(fail);
+    if (!j || S.view !== 'agents') return;
+    const e = j.enroll;
+    const os = S.enrollOs || 'windows';
+    const winCmd = e ? `iwr -UseBasicParsing '${e.windows_url}' -OutFile "$env:TEMP\\SignalwarteAgent.ps1"; powershell -ExecutionPolicy Bypass -File "$env:TEMP\\SignalwarteAgent.ps1"` : '';
+    const linCmd = e ? `curl -fsSL '${e.linux_url}' -o /tmp/signalwarte-agent.sh && sudo bash /tmp/signalwarte-agent.sh install` : '';
+    const worstDisk = (d) => { const en = Object.entries(d || {}); if (!en.length) return null; en.sort((a, b) => a[1] - b[1]); return en[0]; };
+    const pct = (v, w, c) => v === null || v === undefined ? '<span class="muted">–</span>' : `<span class="${v >= c ? 't-down' : v >= w ? 't-warning' : ''}">${fmt(v)} %</span>`;
+    const rows = j.agents.map((a) => {
+      const wd = worstDisk(a.disks);
+      const plat = a.platform === 'linux' ? '🐧' : a.platform === 'windows' ? '🪟' : '❔';
+      return `<tr>
+        <td>${dot(a.status)}</td>
+        <td class="clickable" data-sensor="${a.sensor_id}"><b>${esc(a.device)}</b><div class="sub">${esc(a.host)}</div></td>
+        <td title="${esc(a.os || '')}">${plat} <span class="small">${esc((a.os || 'noch keine Meldung').replace(/Microsoft |GNU\/Linux /g, ''))}</span></td>
+        <td class="nowrap">${a.version ? esc(a.version) : '–'}${a.outdated ? ` <span class="badge st-warning" title="Wird beim nächsten Melden automatisch aktualisiert">→ ${esc(j.latest[a.platform])}</span>` : ''}</td>
+        <td class="right">${pct(a.cpu, 80, 95)}</td><td class="right">${pct(a.ram, 85, 95)}</td>
+        <td class="nowrap">${wd ? `<span class="${wd[1] < 5 ? 't-down' : wd[1] < 15 ? 't-warning' : ''}">${fmt(wd[1])} % frei</span> <span class="muted small">${esc(wd[0])}</span>` : '<span class="muted">–</span>'}</td>
+        <td class="nowrap">${a.updates === null || a.updates === undefined ? '<span class="muted">–</span>' : `${a.updates}${a.security ? ` <span class="t-down" title="Sicherheitsupdates">(${a.security} Sicherheit)</span>` : ''}`}</td>
+        <td>${a.reboot ? '<span class="t-warning" title="Neustart ausstehend">⟳ nötig</span>' : ''}</td>
+        <td class="nowrap muted">${ago(a.last_check)}</td>
+        <td class="right nowrap">${a.download ? `<button class="btn sm" data-act="agent-reinstall" data-sid="${a.sensor_id}">Installbefehl</button>` : ''}</td></tr>`;
+    }).join('');
+    S.agentList = j.agents;
+    el.innerHTML = `<div class="page agentspage"><div class="pagehead"><h1>Agenten</h1><span class="muted">${j.agents.length} Server · aktuelle Versionen: Windows ${esc(j.latest.windows || '?')}, Linux ${esc(j.latest.linux || '?')} · Selbst-Update ${j.autoupdate ? 'an' : 'aus'}</span></div>
+      ${e ? `<div class="card"><h2>➕ Server anbinden</h2>
+        <p class="muted">Diesen Befehl auf einem beliebigen Server ausführen – der Agent meldet sich mit dem <b>Registrierungs-Token</b> selbst an: Gerät und Sensor werden automatisch angelegt (bzw. einem vorhandenen Gerät mit gleicher IP/Hostname zugeordnet). Danach meldet er CPU, Arbeitsspeicher, Festplatten, Updates, Dienste und Systeminfos und <b>aktualisiert sich selbst</b>.</p>
+        <div class="ostabs"><button class="fbtn${os === 'windows' ? ' on' : ''}" data-act="enroll-os" data-os="windows">🪟 Windows</button><button class="fbtn${os === 'linux' ? ' on' : ''}" data-act="enroll-os" data-os="linux">🐧 Linux</button></div>
+        ${!e.enabled ? '<div class="alert">Selbstanmeldung ist deaktiviert – unten aktivieren.</div>' : ''}
+        ${os === 'windows' ? `<p><b>Windows</b> – in einer <b>Administrator-PowerShell</b> einfügen (oder <a href="${esc(e.windows_url)}">SignalwarteAgent.ps1</a> herunterladen und per Rechtsklick „Mit PowerShell ausführen“):</p>
+          <div class="cmdrow"><textarea readonly rows="2" id="enrollCmd" onclick="this.select()">${esc(winCmd)}</textarea><button class="btn" data-act="copy-cmd">Kopieren</button></div>`
+        : `<p><b>Linux</b> (Debian/Ubuntu/RHEL/Proxmox/LXC) – als root einfügen (oder <a href="${esc(e.linux_url)}">signalwarte-agent.sh</a> herunterladen und <code>sudo bash signalwarte-agent.sh</code>):</p>
+          <div class="cmdrow"><textarea readonly rows="2" id="enrollCmd" onclick="this.select()">${esc(linCmd)}</textarea><button class="btn" data-act="copy-cmd">Kopieren</button></div>`}
+        <details class="credbox"><summary>Einstellungen für die Selbstanmeldung</summary>
+          <form id="enrollForm"><div class="grid2">
+            <label class="f"><span>Neue Server landen in Gruppe</span><select name="group">${allGroups().map((g) => opt(g.id, g.name, e.group || 2)).join('')}</select></label>
+            <div class="f"><span>Optionen</span><label class="check"><input type="checkbox" name="enabled"${e.enabled ? ' checked' : ''}> Selbstanmeldung erlaubt</label>
+              <label class="check"><input type="checkbox" name="autoupdate"${j.autoupdate ? ' checked' : ''}> Agenten aktualisieren sich selbst</label></div></div>
+            <div class="grid2"><label class="f"><span>Standard-Dienste Windows (neue Server)</span><input name="services_windows" value="${esc(e.services_windows)}" placeholder="z. B. W32Time,WinRM"></label>
+            <label class="f"><span>Standard-Dienste Linux (neue Server)</span><input name="services_linux" value="${esc(e.services_linux)}" placeholder="z. B. ssh,cron"></label></div>
+            <div class="row wrap"><button class="btn primary">Speichern</button><button type="button" class="btn danger" data-act="enroll-regen">Registrierungs-Token neu erzeugen</button></div>
+            <p class="muted small">Das Token steckt im Befehl – wer es hat, kann Server anmelden (nicht auslesen oder ändern). Nach dem Neuerzeugen funktionieren alte Befehle nicht mehr; bereits installierte Agenten laufen weiter.</p></form></details></div>` : ''}
+      <div class="card nopad">${j.agents.length ? `<table class="tbl big agenttbl"><thead><tr><th></th><th>Server</th><th>System</th><th>Agent</th><th class="right">CPU</th><th class="right">RAM</th><th>Festplatte</th><th>Updates</th><th>Neustart</th><th>Meldung</th><th></th></tr></thead><tbody>${rows}</tbody></table>`
+        : '<p class="empty pad">Noch keine Agenten. Befehl oben auf einem Server ausführen.</p>'}</div></div>`;
+    const ef = $('#enrollForm');
+    if (ef) ef.addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      try { await api('enroll_save', { enabled: ef.enabled.checked, autoupdate: ef.autoupdate.checked, group: ef.group.value, services_windows: ef.services_windows.value, services_linux: ef.services_linux.value }); toast('Gespeichert'); viewAgents(el); } catch (e2) { fail(e2); }
+    });
   }
 
   /* ======================================================== Protokoll */
@@ -1173,6 +1229,20 @@ openclaw mcp probe signalwarte</pre><h3>Claude Code</h3><pre class="code">claude
         case 'close-modal': closeModal(); break;
         case 'close-modal-go': closeModal(); location.hash = a.getAttribute('href'); break;
         case 'scan': scanDialog(); break;
+        case 'enroll-os': S.enrollOs = a.dataset.os; viewAgents($('#view')); break;
+        case 'copy-cmd': { const t = $('#enrollCmd'); navigator.clipboard.writeText(t.value).then(() => toast('Befehl kopiert')).catch(() => { t.select(); document.execCommand('copy'); toast('Befehl kopiert'); }); break; }
+        case 'enroll-regen': if (confirm('Registrierungs-Token neu erzeugen? Bisherige Installationsbefehle funktionieren dann nicht mehr.')) { await api('enroll_regenerate', {}); toast('Neues Token erzeugt'); viewAgents($('#view')); } break;
+        case 'agent-reinstall': {
+          const ag = (S.agentList || []).find((x) => x.sensor_id === +a.dataset.sid);
+          if (!ag) break;
+          const w = `iwr -UseBasicParsing '${ag.download.windows}' -OutFile "$env:TEMP\\SignalwarteAgent.ps1"; powershell -ExecutionPolicy Bypass -File "$env:TEMP\\SignalwarteAgent.ps1"`;
+          const l = `curl -fsSL '${ag.download.linux}' -o /tmp/signalwarte-agent.sh && sudo bash /tmp/signalwarte-agent.sh install`;
+          modal(`<div><h2>Agent für ${esc(ag.device)}</h2><p class="muted">Gerätegebundener Befehl (enthält das Token dieses Sensors) – für Neuinstallation oder Reparatur.</p>
+            <h3>🪟 Windows (Administrator-PowerShell)</h3><textarea readonly rows="3" class="cmdbox" onclick="this.select()">${esc(w)}</textarea>
+            <h3>🐧 Linux (root)</h3><textarea readonly rows="2" class="cmdbox" onclick="this.select()">${esc(l)}</textarea>
+            <div class="mfoot"><button type="button" class="btn primary" data-act="close-modal">Schließen</button></div></div>`, null, { wide: true });
+          break;
+        }
         case 'token-new': {
           const m = modal(`<form><h2>Neuer API-Schlüssel</h2>
             <label class="f"><span>Name (z. B. Agent)</span><input name="name" required placeholder="maik-openclaw"></label>

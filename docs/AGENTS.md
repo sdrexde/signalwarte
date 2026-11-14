@@ -4,15 +4,39 @@ Kleine Client-Skripte, die auf einem Server laufen und **Messwerte** (CPU, RAM, 
 **Systeminformationen** (Hersteller, Modell, Seriennummer, CPU, IPs, MACs …) per HTTPS an Signalwarte melden.
 Funktioniert in jedem Netz, aus dem der Server die Signalwarte-Adresse per HTTPS erreicht – keine eingehenden Ports nötig.
 
-## Einrichten
+## Einrichten – der schnellste Weg (Registrierungs-Token)
 
-1. Gerät in Signalwarte anlegen (oder vorhandenes nehmen) und einen Sensor **„System-Agent (Windows/Linux)“** hinzufügen
-   (die Vorlagen *Windows-Server*, *Domänencontroller* und *Linux-Server* bringen ihn mit).
-   Optional im Sensor: **zu überwachende Dienste**, Grenzen für freien Speicher, Hauptwert.
-2. Sensor öffnen → Kasten **Agent installieren** → Reiter **Windows** oder **Linux**.
-3. Das Skript enthält Server-Adresse und Token bereits – herunterladen und ausführen bzw. den Einzeiler einfügen.
+**Menü „Agenten“ → „Server anbinden“** → Reiter *Windows* oder *Linux* → Befehl kopieren → auf dem Server ausführen. Fertig.
 
-Per MCP: `agent_install {device_id, services}` liefert dieselben Links/Befehle.
+Der Befehl enthält den **Registrierungs-Token**. Bei der Installation meldet sich der Agent damit selbst an:
+Signalwarte legt das **Gerät** (Hostname, IP, Icon, Ping-Sensor) und den **System-Agent-Sensor** automatisch an –
+oder ordnet ihn einem vorhandenen Gerät mit gleicher IP bzw. gleichem Hostnamen zu. Derselbe Befehl funktioniert für
+beliebig viele Server.
+
+Unter „Einstellungen für die Selbstanmeldung“: Zielgruppe für neue Server, Standard-Dienste je Plattform,
+Selbstanmeldung an/aus, Selbst-Update an/aus, Token neu erzeugen (alte Befehle werden ungültig, installierte Agenten laufen weiter).
+
+Per MCP: `agent_enroll_command` liefert diese Befehle; `list_agents` zeigt alle Agenten mit CPU, RAM, Platten, Updates.
+
+## Alternative: gerätegebunden
+
+Gerät in Signalwarte anlegen, Sensor **„System-Agent (Windows/Linux)“** hinzufügen (Vorlagen *Windows-Server*,
+*Domänencontroller*, *Linux-Server* bringen ihn mit), Sensor öffnen → Kasten *Agent installieren*. Oder in der
+Agenten-Übersicht beim jeweiligen Server auf **„Installbefehl“** (z. B. zum Reparieren). Per MCP: `agent_install`.
+
+## Selbst-Update
+
+Bei jeder Meldung teilt Signalwarte dem Agenten mit, ob es eine neuere Version gibt (die Version steht in der
+Skript-Vorlage auf dem Server, also nach `git pull` automatisch aktuell). Dann:
+
+1. neue Version über den eigenen, tokengeschützten Link laden,
+2. **Syntax prüfen** (Linux `bash -n`, Windows PowerShell-Parser) und Versionsnummer abgleichen – sonst verwerfen,
+3. alte Version als `….bak` sichern, ersetzen,
+4. neu starten (Linux: Dienst ersetzt sich selbst, Windows: Neustart über Mutex ohne Doppelinstanz).
+
+In der Agenten-Übersicht zeigt ein gelbes Kennzeichen „→ 1.x.y“ Agenten, die beim nächsten Melden aktualisiert werden.
+Abschaltbar unter *Agenten › Einstellungen für die Selbstanmeldung*. Getestet: Update im Cron- und im Dienstbetrieb,
+fehlerhaftes Update wird verworfen und die laufende Version bleibt.
 
 ### Windows (Windows Server 2012 R2+ / Windows 10+, PowerShell 5.1+)
 
@@ -68,7 +92,7 @@ bash signalwarte-agent.sh collect "nginx,ssh"                # nur sammeln und a
 | Neustart ausstehend | ✔ | ✔ | Warnung |
 | Ereignis-Fehler 1h | ✔ | – | – |
 | Tage seit letztem Update | ✔ | – | – |
-| Updates ausstehend / Sicherheitsupdates | – | ✔ (apt/dnf, stündlich) | – |
+| Updates ausstehend / Sicherheitsupdates | ✔ (Windows Update, alle 6 h, inkl. „Kritische Updates“) | ✔ (apt/dnf, stündlich) | – (in der Agenten-Übersicht rot markiert) |
 | Defender aktiv / Signatur (Tage) | ✔ | – | Warnung, wenn Echtzeitschutz aus |
 
 Alle Kanäle haben einen eigenen Verlauf (Sensor-Details → Kanal wählen) und lassen sich in Maps als Wert einer

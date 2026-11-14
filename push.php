@@ -109,7 +109,16 @@ if ($s['type'] === 'agent') {
     $r = ['status' => $status, 'value' => $channels[$primary] ?? null, 'unit' => str_contains($primary, '%') ? '%' : '',
         'message' => mb_substr($msg, 0, 480), 'extra' => $channels];
     sensor_store_result($s, $r, true);
-    json_out(['ok' => true, 'status' => $status, 'services' => $watch, 'interval' => (int) $s['interval_s']]);
+    // Selbst-Update: neuere Agent-Version verfügbar?
+    require_once __DIR__ . '/lib/agents.php';
+    $resp = ['ok' => true, 'status' => $status, 'services' => $watch, 'interval' => (int) $s['interval_s']];
+    $plat = ($json['info']['platform'] ?? '') === 'linux' ? 'linux' : 'windows';
+    $have = (string) ($json['info']['agent'] ?? '');
+    $latest = agent_latest_version($plat);
+    if ($latest && $have !== '' && version_compare($have, $latest, '<') && setting('agent_autoupdate', '1') === '1') {
+        $resp['update'] = ['version' => $latest, 'url' => agent_download_url((string) $s['push_token'], $plat)];
+    }
+    json_out($resp);
 }
 
 // einfacher Push

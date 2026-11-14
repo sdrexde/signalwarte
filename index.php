@@ -23,6 +23,7 @@ $user = require_login_page();
     <a href="#/" data-nav="home">Übersicht</a>
     <a href="#/devices" data-nav="devices">Geräte</a>
     <a href="#/alarms" data-nav="alarms">Alarme <b class="navbadge" id="alarmBadge" hidden></b></a>
+    <a href="#/agents" data-nav="agents">Agenten</a>
     <a href="#/maps" data-nav="maps">Maps</a>
     <a href="#/log" data-nav="log">Protokoll</a>
     <a href="#/settings" data-nav="settings">Einstellungen</a>

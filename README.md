@@ -22,8 +22,8 @@ PHP 8 + SQLite + Vanilla JS, keine Build-Tools, kein Framework.
 - **Graphen** (1 h / 24 h / 7 T / 30 T) mit Grenzwert-Linien, Verfügbarkeit, Ø/Min/Max
 - **Benachrichtigungen:** E-Mail, Telegram, Webhook (JSON), ntfy-Push – je für Fehler / Warnung / wieder OK
 - **Maps (draw.io-Bedienung):** Formen, Zonen, 20 Netzwerk-Icons, Geräte/Gruppen/Sensoren per Drag & Drop mit Live-Status, Verbinder (gerade/orthogonal/kurvig) mit Wegpunkten, Linien färben sich nach Status (zweifarbig wie PRTG), Zoom/Pan, Raster & Hilfslinien, Mehrfachauswahl, Ausrichten/Verteilen, Undo/Redo, Copy/Paste, Export PNG/SVG/JSON, **öffentlicher Link für NOC-Wand**
-- **System-Agenten für Windows und Linux:** ein Skript (PowerShell bzw. Bash) meldet CPU, RAM, Laufwerke, Dienste, Updates, Neustart nötig, Netzwerk, Temperatur und **Systeminformationen** (Hersteller, Modell, Seriennummer, CPU, IPs, MACs …) – Download mit eingesetztem Token, Installation mit einem Befehl → [docs/AGENTS.md](docs/AGENTS.md)
-- **MCP-Server für KI-Agenten** (Maik/OpenClaw, Tom/Hermes, Claude): 26 Werkzeuge zum Abfragen **und Verwalten** (Geräte/Sensoren anlegen, Netz scannen, Alarme bestätigen, Agenten einrichten), API-Schlüssel mit Rollen, Protokollierung → [docs/MCP.md](docs/MCP.md)
+- **System-Agenten für Windows und Linux** (Menü **Agenten**): ein Einzeiler mit Registrierungs-Token bindet beliebige Server an (Gerät wird automatisch angelegt), Agenten **aktualisieren sich selbst**; gemeldet werden CPU, RAM, Laufwerke, Dienste, Updates, Neustart nötig, Netzwerk, Temperatur und **Systeminformationen** (Hersteller, Modell, Seriennummer, CPU, IPs, MACs …) – Download mit eingesetztem Token, Installation mit einem Befehl → [docs/AGENTS.md](docs/AGENTS.md)
+- **MCP-Server für KI-Agenten** (Maik/OpenClaw, Tom/Hermes, Claude): 28 Werkzeuge zum Abfragen **und Verwalten** (Geräte/Sensoren anlegen, Netz scannen, Alarme bestätigen, Agenten einrichten), API-Schlüssel mit Rollen, Protokollierung → [docs/MCP.md](docs/MCP.md)
 - **Benutzer & Rollen:** Administrator / Nur-Lesen, CSRF-Schutz, Passwort-Hashing
 - **Sicherheit:** Zwei-Faktor-Anmeldung (TOTP: Google/Microsoft Authenticator, Aegis, Bitwarden …) mit Wiederherstellungscodes, optional **2FA-Pflicht für alle**, Anmeldesperre nach 5 Fehlversuchen (15 min, pro IP und Benutzer), Abmeldung nach Inaktivität, Anmeldungen im Protokoll
 - Hell/Dunkel-Modus (folgt dem System), mobil nutzbar
@@ -152,8 +152,8 @@ cd /var/www/html/maik/monitor && git pull && chown -R www-data:www-data .
 
 ## System-Agenten (Windows & Linux)
 
-Sensor **„System-Agent (Windows/Linux)“** am Gerät anlegen → in den Sensor-Details Reiter *Windows* oder *Linux* →
-Skript herunterladen bzw. Einzeiler ausführen. Details, gemeldete Werte und Fehlersuche: **[docs/AGENTS.md](docs/AGENTS.md)**.
+Menü **Agenten → Server anbinden** → Einzeiler kopieren → auf dem Server ausführen. Der Agent meldet sich per
+Registrierungs-Token selbst an, liefert CPU, RAM, Festplatten, Updates, Dienste und Systeminfos und aktualisiert sich selbst. Details, gemeldete Werte und Fehlersuche: **[docs/AGENTS.md](docs/AGENTS.md)**.
 
 ## MCP-Server für KI-Agenten
 

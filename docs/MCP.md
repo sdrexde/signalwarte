@@ -99,6 +99,7 @@ Dafür einen `read`-Schlüssel verwenden.
 | `list_templates` | read | Gerätevorlagen (windows, dc, linux, pfsense, fritzbox, fritzrep, switch, proxmox, nas, printer, web) |
 | `list_events` | read | Protokoll (status, notify, user, mcp), Textsuche, Zeitraum |
 | `list_maps` | read | Maps mit Elementanzahl und Link |
+| `list_agents` | read | alle Server mit System-Agent: Version (veraltet?), CPU, RAM, freier Platz, (Sicherheits-)Updates, Neustart; Filter `only_problems` |
 | `get_scan_exclusions` | read | DHCP-/Ausschlussbereiche |
 | `check_sensor` | operate | Sensor sofort prüfen |
 | `acknowledge_alarm` | operate | Fehler bestätigen (mit Kommentar) |
@@ -112,6 +113,7 @@ Dafür einen `read`-Schlüssel verwenden.
 | `scan_network` | admin | Netze scannen (legt nichts an), mit Gerätetyp und Vorlagen-Vorschlag; DHCP-Ausschlüsse werden übersprungen |
 | `discover_host` | admin | einzelnen Host erkennen, Sensoren vorschlagen |
 | `set_scan_exclusions` | admin | DHCP-/Ausschlussbereiche setzen |
+| `agent_enroll_command` | admin | Einzeiler mit Registrierungs-Token für neue Server (Windows/Linux) |
 | `agent_install` | admin | System-Agent-Sensor sicherstellen, Download-Links und Installationsbefehle für Windows und Linux liefern |
 
 Lesende Werkzeuge sind als `readOnlyHint`, Löschen als `destructiveHint` markiert – Clients können so vor gefährlichen

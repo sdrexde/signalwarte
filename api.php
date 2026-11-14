@@ -5,6 +5,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/lib/engine.php';
 require_once __DIR__ . '/lib/ops.php';
 require_once __DIR__ . '/lib/apitokens.php';
+require_once __DIR__ . '/lib/agents.php';
 
 session_boot();
 $user = current_user();
@@ -600,6 +601,63 @@ try {
             }
             $db->prepare('UPDATE users SET totp_secret = NULL, totp_enabled = 0, totp_last = NULL, recovery_codes = NULL WHERE id = ?')->execute([$id]);
             log_event('user', "2FA zurückgesetzt für Benutzer #{$id} von {$user['username']}");
+            json_out(['ok' => true]);
+
+        case 'agents':
+            $rows = $db->query("SELECT s.id sensor_id, s.status, s.acked, s.paused, s.last_check, s.last_message, s.last_channels, s.push_token, s.interval_s,
+                d.id device_id, d.name device, d.host, d.paused dpaused, d.sysinfo, d.sysinfo_at
+                FROM sensors s JOIN devices d ON d.id = s.device_id WHERE s.type = 'agent'")->fetchAll();
+            $pg = paused_group_ids();
+            $list = [];
+            foreach ($rows as $r) {
+                $si = $r['sysinfo'] ? (json_decode($r['sysinfo'], true) ?: []) : [];
+                $ch = $r['last_channels'] ? (json_decode($r['last_channels'], true) ?: []) : [];
+                $free = [];
+                foreach ($ch as $k => $v) {
+                    if (preg_match('/^Frei (.+) %$/u', $k, $m)) {
+                        $free[$m[1]] = $v;
+                    }
+                }
+                $plat = $si['platform'] ?? null;
+                $item = [
+                    'sensor_id' => (int) $r['sensor_id'], 'device_id' => (int) $r['device_id'], 'device' => $r['device'], 'host' => $r['host'],
+                    'status' => ((int) $r['paused'] || (int) $r['dpaused']) ? 'paused' : (($r['status'] === 'down' && (int) $r['acked']) ? 'acked' : $r['status']),
+                    'last_check' => $r['last_check'] ? (int) $r['last_check'] : null, 'message' => $r['last_message'],
+                    'platform' => $plat, 'os' => $si['os'] ?? null, 'version' => $si['agent'] ?? null,
+                    'outdated' => $plat && !empty($si['agent']) && ($lv = agent_latest_version($plat)) && version_compare($si['agent'], $lv, '<'),
+                    'cpu' => $ch['CPU %'] ?? null, 'ram' => $ch['RAM %'] ?? null, 'disks' => $free,
+                    'updates' => $ch['Updates ausstehend'] ?? null, 'security' => $ch['Sicherheitsupdates'] ?? null,
+                    'reboot' => $ch['Neustart ausstehend'] ?? null, 'uptime' => $ch['Laufzeit (Tage)'] ?? null,
+                ];
+                if (is_admin()) {
+                    $item['download'] = ['windows' => agent_download_url($r['push_token'], 'windows'), 'linux' => agent_download_url($r['push_token'], 'linux')];
+                }
+                $list[] = $item;
+            }
+            usort($list, fn($a, $b) => device_cmp(['host' => $a['host'], 'name' => $a['device']], ['host' => $b['host'], 'name' => $b['device']]));
+            $out = ['ok' => true, 'agents' => $list, 'latest' => ['windows' => agent_latest_version('windows'), 'linux' => agent_latest_version('linux')],
+                'autoupdate' => setting('agent_autoupdate', '1') === '1'];
+            if (is_admin()) {
+                $base = public_base_url();
+                $key = enroll_key();
+                $out['enroll'] = ['enabled' => enroll_enabled(), 'key' => $key, 'group' => (int) setting('enroll_group', '0'),
+                    'services_windows' => (string) setting('enroll_services_windows', ''), 'services_linux' => (string) setting('enroll_services_linux', ''),
+                    'windows_url' => $base . 'agent.php?enroll=' . $key, 'linux_url' => $base . 'agent.php?enroll=' . $key . '&os=linux'];
+            }
+            json_out($out);
+
+        case 'enroll_save':
+            setting_set('enroll_enabled', !empty($in['enabled']) ? '1' : '0');
+            setting_set('enroll_group', (string) (int) ($in['group'] ?? 0));
+            setting_set('enroll_services_windows', in_str($in, 'services_windows', 300));
+            setting_set('enroll_services_linux', in_str($in, 'services_linux', 300));
+            setting_set('agent_autoupdate', !empty($in['autoupdate']) ? '1' : '0');
+            log_event('user', "Agent-Einstellungen geändert von {$user['username']}");
+            json_out(['ok' => true]);
+
+        case 'enroll_regenerate':
+            enroll_key_regenerate();
+            log_event('user', "Registrierungs-Token neu erzeugt von {$user['username']} (alte Einzeiler funktionieren nicht mehr)");
             json_out(['ok' => true]);
 
         case 'api_tokens':

@@ -31,7 +31,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$AgentVersion = '1.2.0'
+$AgentVersion = '1.3.0'
 $TaskName = 'SignalwarteAgent'
 $InstallDir = Join-Path $env:ProgramData 'SignalwarteAgent'
 $InstalledScript = Join-Path $InstallDir 'SignalwarteAgent.ps1'
@@ -181,6 +181,32 @@ function Get-Metrics {
     }
     if ($null -ne $State['hotfix_days']) { $ch['Tage seit letztem Update'] = $State['hotfix_days']; $info.lastupdate = $State['hotfix_id'] }
 
+    # Ausstehende Windows-Updates (Windows Update Agent, Ergebnis der letzten Suche/Cache; hoechstens alle 6 h)
+    if (-not $State['wu_at'] -or ($now - [datetime]$State['wu_at']).TotalHours -gt 6) {
+        try {
+            $session = New-Object -ComObject Microsoft.Update.Session
+            $searcher = $session.CreateUpdateSearcher()
+            $searcher.Online = $false
+            $res = $searcher.Search("IsInstalled=0 and IsHidden=0 and Type='Software'")
+            $all = 0; $sec = 0; $crit = 0
+            foreach ($u in $res.Updates) {
+                $all++
+                $cats = @($u.Categories | ForEach-Object { $_.Name })
+                if ($cats -contains 'Security Updates' -or $u.MsrcSeverity) { $sec++ }
+                if ($u.MsrcSeverity -eq 'Critical' -or $cats -contains 'Critical Updates') { $crit++ }
+            }
+            $State['wu_all'] = $all; $State['wu_sec'] = $sec; $State['wu_crit'] = $crit
+        } catch {
+            $State['wu_all'] = $null
+        }
+        $State['wu_at'] = $now.ToString('o')
+    }
+    if ($null -ne $State['wu_all']) {
+        $ch['Updates ausstehend'] = [int]$State['wu_all']
+        $ch['Sicherheitsupdates'] = [int]$State['wu_sec']
+        $ch['Kritische Updates'] = [int]$State['wu_crit']
+    }
+
     # Defender
     try {
         if (Get-Command Get-MpComputerStatus -ErrorAction SilentlyContinue) {
@@ -242,7 +268,35 @@ function Send-Metrics($config, $data) {
 }
 
 # ============================================================================ Agent-Schleife
+# Selbst-Update: neue Version laden, mit dem PowerShell-Parser pruefen, alte sichern, ersetzen, neu starten
+function Update-Agent($ver, $url) {
+    if (-not $PSCommandPath -or ((Resolve-Path $PSCommandPath).Path -ne $InstalledScript)) { return $false }
+    try {
+        Write-Log "Update auf Version $ver wird geladen ..."
+        $tmp = Join-Path $InstallDir 'update.ps1'
+        Invoke-WebRequest -Uri $url -OutFile $tmp -UseBasicParsing -TimeoutSec 60
+        $errs = $null; $tokens = $null
+        [void][System.Management.Automation.Language.Parser]::ParseFile($tmp, [ref]$tokens, [ref]$errs)
+        if ($errs -and $errs.Count) { Write-Log "Update verworfen: Syntaxfehler ($($errs[0].Message))" 'WARN'; Remove-Item $tmp -Force; return $false }
+        if (-not (Select-String -Path $tmp -Pattern ("^\`$AgentVersion = '" + [regex]::Escape($ver) + "'") -Quiet)) { Write-Log 'Update verworfen: Version passt nicht' 'WARN'; Remove-Item $tmp -Force; return $false }
+        Copy-Item $InstalledScript "$InstalledScript.bak" -Force
+        Move-Item $tmp $InstalledScript -Force
+        try { Unblock-File -Path $InstalledScript } catch { }
+        Write-Log "Update auf $ver installiert (vorherige Version: SignalwarteAgent.ps1.bak), starte neu"
+        $arg = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $InstalledScript + '" -Run'
+        Start-Process -FilePath 'powershell.exe' -ArgumentList $arg -WindowStyle Hidden
+        return $true
+    } catch {
+        Write-Log "Update fehlgeschlagen: $($_.Exception.Message)" 'WARN'
+        return $false
+    }
+}
+
 function Start-AgentLoop {
+    # nur eine Instanz (geplante Aufgabe, Waechter und Neustart nach Update teilen sich den Mutex)
+    $mutex = New-Object System.Threading.Mutex($false, 'Global\SignalwarteAgent')
+    try { $got = $mutex.WaitOne(90000) } catch [System.Threading.AbandonedMutexException] { $got = $true }
+    if (-not $got) { return }
     $config = Get-AgentConfig
     Initialize-Tls
     Write-Log "Agent $AgentVersion gestartet, Server $($config.url -replace 'token=.*', 'token=***')"
@@ -260,6 +314,9 @@ function Start-AgentLoop {
             $state['last_ok'] = (Get-Date).ToString('o')
             $state['last_status'] = [string]$resp.status
             Save-State $state
+            if ($resp.update -and $resp.update.version -and ([version]$resp.update.version -gt [version]$AgentVersion)) {
+                if (Update-Agent $resp.update.version $resp.update.url) { $mutex.ReleaseMutex(); return }
+            }
             # Neue Dienstliste sofort einmal nachliefern
             $newWatch = @($state['services'])
             if (($newWatch -join ',') -ne ($watch -join ',') -and $newWatch.Count) { Start-Sleep -Seconds 3; continue }
@@ -307,6 +364,26 @@ function Install-Agent {
     $self = $PSCommandPath
     if ($self -and ((Resolve-Path $self).Path -ne $InstalledScript)) { Copy-Item -Path $self -Destination $InstalledScript -Force }
     try { Unblock-File -Path $InstalledScript } catch { }
+    if ($cfg -and -not $cfg.url -and $cfg.enroll_key) {
+        # Selbstanmeldung mit Registrierungs-Token (bei Neuinstallation vorhandene Konfiguration weiterverwenden)
+        $old = $null
+        if (Test-Path $ConfigPath) { try { $old = Get-Content $ConfigPath -Raw | ConvertFrom-Json } catch { } }
+        if ($old -and $old.url) {
+            Write-Host 'Vorhandene Anmeldung wird weiterverwendet.'
+            $cfg = $old
+        } else {
+            Write-Host 'Melde diesen Server bei Signalwarte an ...' -ForegroundColor Cyan
+            Initialize-Tls
+            $os = Get-CimInstance Win32_OperatingSystem
+            $ip = $null
+            try { $ip = (Get-NetIPConfiguration -ErrorAction SilentlyContinue | Where-Object { $_.IPv4DefaultGateway } | Select-Object -First 1).IPv4Address[0].IPAddress } catch { }
+            $body = @{ key = $cfg.enroll_key; hostname = $env:COMPUTERNAME; ip = $ip; platform = 'windows'; os = "$($os.Caption) $($os.Version)".Trim() } | ConvertTo-Json -Compress
+            $r = Invoke-RestMethod -Uri $cfg.enroll_url -Method Post -Body ([Text.Encoding]::UTF8.GetBytes($body)) -ContentType 'application/json; charset=utf-8' -TimeoutSec 30 -UseBasicParsing
+            if (-not $r.url) { throw 'Anmeldung fehlgeschlagen (keine URL erhalten).' }
+            if ($r.created) { Write-Host 'Neues Geraet in Signalwarte angelegt.' -ForegroundColor Green } else { Write-Host 'Vorhandenes Geraet in Signalwarte gefunden.' -ForegroundColor Green }
+            $cfg = [pscustomobject]@{ url = $r.url; sensor = $r.sensor_id; device = $env:COMPUTERNAME }
+        }
+    }
     if ($cfg) { $cfg | ConvertTo-Json -Depth 5 | Set-Content -Path $ConfigPath -Encoding UTF8 }
     if (Test-Path $StatePath) { Remove-Item $StatePath -Force }
     $config = Get-AgentConfig

@@ -6,6 +6,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/lib/ops.php';
 require_once __DIR__ . '/lib/apitokens.php';
+require_once __DIR__ . '/lib/agents.php';
 
 const MCP_VERSIONS = ['2024-11-05', '2025-03-26', '2025-06-18', '2025-11-25', '2026-07-28'];
 const MCP_SERVER = ['name' => 'signalwarte', 'title' => 'Signalwarte', 'version' => APP_VERSION];
@@ -246,6 +247,8 @@ function mcp_tools(): array
         mcp_tool('list_events', 'Protokoll', 'Ereignisprotokoll (Statuswechsel, Benachrichtigungen, Benutzer-/MCP-Aktionen), neueste zuerst.', 'read',
             ['type' => p('string', 'Typ', ['enum' => ['status', 'notify', 'user', 'mcp']]), 'search' => p('string', 'Textsuche'), 'hours' => p('integer', 'nur die letzten N Stunden'), 'limit' => p('integer', 'max. Anzahl (Standard 50)')], [], 't_events'),
         mcp_tool('list_maps', 'Maps', 'Vorhandene Netzwerk-Maps mit Name, Anzahl Elemente und Freigabe-Status.', 'read', [], [], 't_maps'),
+        mcp_tool('list_agents', 'System-Agenten', 'Alle Server mit System-Agent: Plattform, Agent-Version (veraltet?), CPU, RAM, freier Platz je Laufwerk, ausstehende (Sicherheits-)Updates, Neustart nötig, letzte Meldung.', 'read',
+            ['only_problems' => p('boolean', 'nur Server mit Updates, Neustart, wenig Platz, hoher Last oder Fehlerstatus')], [], 't_agents'),
         mcp_tool('get_scan_exclusions', 'DHCP-/Ausschlussbereiche', 'Bereiche, die beim Netzwerkscan übersprungen werden.', 'read', [], [], 't_get_excl'),
         // ---------------------------------------------------------------- bedienen
         mcp_tool('check_sensor', 'Sensor jetzt prüfen', 'Führt die Prüfung eines Sensors sofort aus und liefert das Ergebnis.', 'operate',
@@ -283,6 +286,8 @@ function mcp_tools(): array
             ['host' => p('string', 'Host oder IP')], ['host'], 't_discover'),
         mcp_tool('set_scan_exclusions', 'DHCP-/Ausschlussbereiche setzen', 'Ersetzt die Ausschlussbereiche (eine Zeile pro Bereich, z. B. 192.168.11.50-192.168.11.84).', 'admin',
             ['ranges' => p('string', 'Bereiche, zeilen- oder kommagetrennt')], ['ranges'], 't_set_excl', false),
+        mcp_tool('agent_enroll_command', 'Agent-Einzeiler (Registrierung)', 'Liefert die Installationsbefehle mit Registrierungs-Token für beliebige neue Server (Windows/Linux). Der Agent legt sein Gerät selbst an.', 'admin',
+            [], [], 't_enroll_cmd'),
         mcp_tool('agent_install', 'System-Agent einrichten', 'Sorgt dafür, dass ein Gerät einen System-Agent-Sensor hat, und liefert Download-Links und Installationsbefehle für Windows und Linux.', 'admin',
             ['device_id' => p('integer', 'Geräte-ID'), 'services' => p('string', 'Zu überwachende Dienste, Komma-getrennt (optional)')], ['device_id'], 't_agent', false, false, false),
     ];
@@ -933,4 +938,52 @@ function t_agent(array $a): array
         'windows' => ['download' => $win, 'install_powershell_admin' => "iwr -UseBasicParsing '{$win}' -OutFile \"\$env:TEMP\\SignalwarteAgent.ps1\"; powershell -ExecutionPolicy Bypass -File \"\$env:TEMP\\SignalwarteAgent.ps1\""],
         'linux' => ['download' => $lin, 'install_shell_root' => "curl -fsSL '{$lin}' -o /tmp/signalwarte-agent.sh && sudo bash /tmp/signalwarte-agent.sh install"],
         'hint' => 'Links enthalten den geheimen Agent-Schlüssel – nur an den jeweiligen Server weitergeben, nicht in Chats/Tickets posten.'];
+}
+
+function t_agents(array $a): array
+{
+    $rows = db()->query("SELECT s.id, s.status, s.acked, s.last_check, s.last_channels, d.id did, d.name, d.host, d.sysinfo FROM sensors s JOIN devices d ON d.id = s.device_id WHERE s.type = 'agent'")->fetchAll();
+    $out = [];
+    foreach ($rows as $r) {
+        $si = json_decode((string) $r['sysinfo'], true) ?: [];
+        $ch = json_decode((string) $r['last_channels'], true) ?: [];
+        $disks = [];
+        foreach ($ch as $k => $v) {
+            if (preg_match('/^Frei (.+) %$/u', $k, $m)) {
+                $disks[$m[1]] = $v;
+            }
+        }
+        $plat = $si['platform'] ?? null;
+        $latest = $plat ? agent_latest_version($plat) : null;
+        $x = ['device_id' => (int) $r['did'], 'device' => $r['name'], 'host' => $r['host'], 'sensor_id' => (int) $r['id'], 'status' => $r['status'] === 'down' && $r['acked'] ? 'acked' : $r['status'],
+            'platform' => $plat, 'os' => $si['os'] ?? null, 'agent_version' => $si['agent'] ?? null, 'agent_latest' => $latest,
+            'agent_outdated' => $latest && !empty($si['agent']) && version_compare($si['agent'], $latest, '<'),
+            'cpu_pct' => $ch['CPU %'] ?? null, 'ram_pct' => $ch['RAM %'] ?? null, 'disk_free_pct' => $disks,
+            'updates_pending' => $ch['Updates ausstehend'] ?? null, 'security_updates' => $ch['Sicherheitsupdates'] ?? null,
+            'reboot_pending' => isset($ch['Neustart ausstehend']) ? (bool) $ch['Neustart ausstehend'] : null, 'uptime_days' => $ch['Laufzeit (Tage)'] ?? null,
+            'last_report' => iso($r['last_check'] ? (int) $r['last_check'] : null)];
+        if (!empty($a['only_problems'])) {
+            $prob = in_array($x['status'], ['down', 'warning', 'unknown'], true) || ($x['security_updates'] ?? 0) > 0 || $x['reboot_pending']
+                || ($x['cpu_pct'] ?? 0) > 85 || ($x['ram_pct'] ?? 0) > 90 || ($disks && min($disks) < 15);
+            if (!$prob) {
+                continue;
+            }
+        }
+        $out[] = $x;
+    }
+    usort($out, fn($a, $b) => device_cmp(['host' => $a['host'], 'name' => $a['device']], ['host' => $b['host'], 'name' => $b['device']]));
+    return $out;
+}
+
+function t_enroll_cmd(array $a): array
+{
+    if (!enroll_enabled()) {
+        throw new ToolError('Selbstanmeldung ist deaktiviert (Agenten › Einstellungen)');
+    }
+    $base = public_base_url();
+    $key = enroll_key();
+    $w = $base . 'agent.php?enroll=' . $key;
+    return ['windows_powershell_admin' => "iwr -UseBasicParsing '{$w}' -OutFile \"\$env:TEMP\\SignalwarteAgent.ps1\"; powershell -ExecutionPolicy Bypass -File \"\$env:TEMP\\SignalwarteAgent.ps1\"",
+        'linux_root' => "curl -fsSL '{$w}&os=linux' -o /tmp/signalwarte-agent.sh && sudo bash /tmp/signalwarte-agent.sh install",
+        'hint' => 'Enthält den Registrierungs-Token – nur auf eigenen Servern ausführen, nicht in Chats/Tickets posten.'];
 }

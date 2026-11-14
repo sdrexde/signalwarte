@@ -13,7 +13,7 @@
 # Server-Adresse und Token eingesetzt. Konfiguration nach der Installation: /etc/signalwarte-agent.conf
 set -u
 
-AGENT_VERSION="1.0.0"
+AGENT_VERSION="1.1.0"
 INSTALL_DIR="/opt/signalwarte-agent"
 INSTALLED="$INSTALL_DIR/signalwarte-agent.sh"
 CONF="/etc/signalwarte-agent.conf"
@@ -21,8 +21,12 @@ STATE_DIR="/var/lib/signalwarte-agent"
 LOG="/var/log/signalwarte-agent.log"
 UNIT="/etc/systemd/system/signalwarte-agent.service"
 
-# Beim Download von Signalwarte eingesetzt
+# Beim Download von Signalwarte eingesetzt: entweder die Push-URL (Download am Sensor) oder
+# Anmelde-Adresse + Registrierungs-Token (Download unter „Agenten“ – der Agent legt sein Gerät selbst an)
 EMBEDDED_URL='__SIGNALWARTE_URL__'
+EMBEDDED_ENROLL_URL='__SIGNALWARTE_ENROLL_URL__'
+EMBEDDED_ENROLL_KEY='__SIGNALWARTE_ENROLL_KEY__'
+RUN_LOOP=0
 
 # ----------------------------------------------------------------------------- Hilfen
 log() {
@@ -51,7 +55,7 @@ is_num() { [[ ${1-} =~ ^-?[0-9]+([.][0-9]+)?$ ]]; }
 load_conf() {
     URL=""
     [ -f "$CONF" ] && . "$CONF"
-    if [ -z "${URL:-}" ] && [[ $EMBEDDED_URL != __SIGNALWARTE* ]]; then URL="$EMBEDDED_URL"; fi
+    if [ -z "${URL:-}" ] && [[ $EMBEDDED_URL != __SIGNALWARTE* ]] && [ -n "$EMBEDDED_URL" ]; then URL="$EMBEDDED_URL"; fi
     if [ -z "${URL:-}" ]; then
         echo "Keine Konfiguration gefunden. Skript bitte über Signalwarte herunterladen (Sensor 'System-Agent' → Details)." >&2
         exit 1
@@ -208,6 +212,10 @@ send_once() {
         [ -n "$iv" ] && echo "$iv" >"$STATE_DIR/interval"
         date '+%Y-%m-%d %H:%M:%S' >"$STATE_DIR/last_ok"; echo "${st:-?}" >"$STATE_DIR/last_status"
         RESP_STATUS=$st
+        local uver uurl
+        uver=$(printf '%s' "$resp" | grep -o '"update":{[^}]*}' | grep -o '"version":"[^"]*"' | cut -d'"' -f4)
+        uurl=$(printf '%s' "$resp" | grep -o '"update":{[^}]*}' | grep -o '"url":"[^"]*"' | cut -d'"' -f4 | sed 's#\\/#/#g')
+        if [ -n "$uver" ] && [ -n "$uurl" ] && [ "${1:-}" != "noupdate" ]; then self_update "$uver" "$uurl" || true; fi
         # neue Dienstliste sofort einmal nachliefern
         if [ "$svc" != "${WATCH:-}" ] && [ -n "$svc" ] && [ "${1:-}" != "noretry" ]; then send_once noretry; fi
         return 0
@@ -217,7 +225,40 @@ send_once() {
     fi
 }
 
+# Selbst-Update: neue Version laden, Syntax prüfen, alte sichern, ersetzen, neu starten
+self_update() {   # $1 = Version, $2 = URL
+    local ver=$1 url=$2 tmp="$STATE_DIR/update.sh"
+    [ "$(readlink -f "$0")" = "$INSTALLED" ] || { log "INFO Update $ver verfügbar (nur die installierte Kopie aktualisiert sich selbst)"; return 0; }
+    log "INFO Update auf Version $ver wird geladen …"
+    if command -v curl >/dev/null 2>&1; then curl -fsS -m 60 -o "$tmp" "$url"; else wget -q -T 60 -O "$tmp" "$url"; fi || { log "WARN Update-Download fehlgeschlagen"; return 1; }
+    if ! bash -n "$tmp" 2>/dev/null; then log "WARN Update verworfen: Syntaxfehler"; rm -f "$tmp"; return 1; fi
+    if ! grep -q "^AGENT_VERSION=\"$ver\"" "$tmp"; then log "WARN Update verworfen: Version passt nicht"; rm -f "$tmp"; return 1; fi
+    cp -f "$INSTALLED" "$INSTALLED.bak"
+    install -m 700 "$tmp" "$INSTALLED" && rm -f "$tmp"
+    log "INFO Update auf $ver installiert (vorherige Version: $INSTALLED.bak)"
+    if [ "$RUN_LOOP" = 1 ]; then exec "$INSTALLED" run; fi
+    return 0
+}
+
+primary_ip() {
+    ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i=1;i<NF;i++) if ($i=="src") {print $(i+1); exit}}'
+}
+
+# Selbstanmeldung mit Registrierungs-Token → liefert die Push-URL des (ggf. neu angelegten) Geräts
+enroll() {
+    local osn body resp url
+    osn=$( (. /etc/os-release 2>/dev/null; echo "${PRETTY_NAME:-Linux}") )
+    body="{\"key\":$(js "$EMBEDDED_ENROLL_KEY"),\"hostname\":$(js "$(hostname)"),\"ip\":$(js "$(primary_ip)"),\"platform\":\"linux\",\"os\":$(js "$osn")}"
+    URL="$EMBEDDED_ENROLL_URL"
+    resp=$(http_post "$body" 2>&1) || { echo "Anmeldung fehlgeschlagen: $resp" >&2; return 1; }
+    url=$(printf '%s' "$resp" | grep -o '"url":"[^"]*"' | cut -d'"' -f4 | sed 's#\\/#/#g')
+    [ -n "$url" ] || { echo "Anmeldung fehlgeschlagen: $resp" >&2; return 1; }
+    printf '%s' "$resp" | grep -q '"created":true' && echo "Neues Gerät in Signalwarte angelegt." || echo "Vorhandenes Gerät in Signalwarte gefunden."
+    URL="$url"
+}
+
 run_loop() {
+    RUN_LOOP=1
     load_conf
     log "INFO Agent $AGENT_VERSION gestartet, Server ${URL%%\?*}"
     while true; do
@@ -236,10 +277,15 @@ do_install() {
     need_root
     local url="${URL:-}"
     [ -f "$CONF" ] && . "$CONF"
-    if [[ $EMBEDDED_URL != __SIGNALWARTE* ]]; then url="$EMBEDDED_URL"; else url="${URL:-}"; fi
-    [ -z "$url" ] && { echo "Dieses Skript enthält keine Server-Adresse. Bitte über Signalwarte herunterladen." >&2; exit 1; }
+    if [[ $EMBEDDED_URL != __SIGNALWARTE* ]] && [ -n "$EMBEDDED_URL" ]; then url="$EMBEDDED_URL"; else url="${URL:-}"; fi
     command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1 || {
         echo "curl wird installiert …"; (apt-get install -y curl || dnf install -y curl || apk add curl) >/dev/null 2>&1; }
+    if [ -z "$url" ] && [[ $EMBEDDED_ENROLL_KEY != __SIGNALWARTE* ]] && [ -n "$EMBEDDED_ENROLL_KEY" ]; then
+        echo "Melde diesen Server bei Signalwarte an …"
+        enroll || exit 1
+        url="$URL"
+    fi
+    [ -z "$url" ] && { echo "Dieses Skript enthält keine Server-Adresse. Bitte über Signalwarte herunterladen." >&2; exit 1; }
     echo "Signalwarte-Agent $AGENT_VERSION wird installiert …"
     mkdir -p "$INSTALL_DIR" "$STATE_DIR"
     chmod 700 "$STATE_DIR"
