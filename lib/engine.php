@@ -5,6 +5,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/bootstrap.php';
 require_once __DIR__ . '/sensors.php';
 require_once __DIR__ . '/notify.php';
+require_once __DIR__ . '/templates.php';
 
 /** Effektiv pausierte Gruppen-IDs (Pausierung erbt nach unten). */
 function paused_group_ids(): array

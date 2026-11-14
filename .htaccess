@@ -6,3 +6,6 @@ Options -Indexes
 <FilesMatch "\.(sqlite|sqlite-wal|sqlite-shm|lock|md|sh)$">
   Require all denied
 </FilesMatch>
+
+# Authorization-Header für MCP/API an PHP durchreichen (php-fpm/CGI)
+SetEnvIf Authorization "(.*)" HTTP_AUTHORIZATION=$1

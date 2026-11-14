@@ -62,6 +62,9 @@ if ($s['type'] === 'agent') {
     if (($channels['Neustart ausstehend'] ?? 0) > 0) {
         $bump('warning', 'Neustart ausstehend');
     }
+    if (($channels['Dienste fehlgeschlagen'] ?? 0) > 0) {
+        $bump('warning', $channels['Dienste fehlgeschlagen'] . ' systemd-Dienst(e) fehlgeschlagen' . (!empty($json['failed']) ? ' (' . mb_substr(implode(', ', (array) $json['failed']), 0, 150) . ')' : ''));
+    }
     if (($channels['Auto-Dienste gestoppt'] ?? 0) > 0) {
         $bump('warning', ($channels['Auto-Dienste gestoppt']) . ' automatische Dienste gestoppt' . (!empty($json['stopped']) ? ' (' . mb_substr(implode(', ', (array) $json['stopped']), 0, 150) . ')' : ''));
     }
@@ -78,18 +81,26 @@ if ($s['type'] === 'agent') {
         }
         if ($state === null) {
             $bump('warning', "Dienst {$name}: keine Daten (kommt mit nächster Meldung)");
-        } elseif (strcasecmp($state, 'Running') !== 0) {
+        } elseif (!in_array(strtolower($state), ['running', 'active'], true)) {
             $bump('down', "Dienst {$name}: {$state}");
         }
-        $channels["Dienst {$name}"] = $state !== null && strcasecmp($state, 'Running') === 0 ? 1 : 0;
+        $channels["Dienst {$name}"] = $state !== null && in_array(strtolower($state), ['running', 'active'], true) ? 1 : 0;
     }
     $agentStatus = $json['status'] ?? null;
     if (in_array($agentStatus, ['warning', 'down'], true)) {
         $bump($agentStatus, (string) ($json['msg'] ?? 'Agent meldet Problem'));
     }
+    // Systeminformationen am Gerät ablegen (Hersteller, Modell, CPU, RAM, Netzwerk, Laufwerke …)
+    if (is_array($json['info'] ?? null)) {
+        $info = $json['info'];
+        $enc = json_encode($info, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        if ($enc !== false && strlen($enc) <= 65536) {
+            db()->prepare('UPDATE devices SET sysinfo = ?, sysinfo_at = ? WHERE id = ?')->execute([$enc, time(), $s['device_id']]);
+        }
+    }
     $primary = (string) ($cfg['primary'] ?? 'CPU %');
     $info = array_filter([
-        $json['info']['os'] ?? null,
+        is_string($json['info']['os'] ?? null) ? $json['info']['os'] : null,
         isset($channels['CPU %']) ? 'CPU ' . $channels['CPU %'] . '%' : null,
         isset($channels['RAM %']) ? 'RAM ' . $channels['RAM %'] . '%' : null,
         isset($channels['Laufzeit (Tage)']) ? 'Laufzeit ' . $channels['Laufzeit (Tage)'] . ' T' : null,

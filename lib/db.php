@@ -179,4 +179,21 @@ function db_migrate_more(PDO $pdo, int $ver): void
         PRAGMA user_version = 5;
         SQL);
     }
+    if ($ver < 6) {
+        $pdo->exec(<<<SQL
+        ALTER TABLE devices ADD COLUMN sysinfo TEXT;          -- Systeminformationen vom Agenten (JSON)
+        ALTER TABLE devices ADD COLUMN sysinfo_at INTEGER;
+        CREATE TABLE IF NOT EXISTS api_tokens (
+            id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL,
+            token_hash TEXT NOT NULL UNIQUE,                  -- sha256 des Schlüssels, Klartext nur bei Erzeugung sichtbar
+            prefix TEXT NOT NULL,
+            role TEXT NOT NULL DEFAULT 'read',                -- read | operate | admin
+            created_at INTEGER NOT NULL,
+            created_by TEXT,
+            last_used INTEGER
+        );
+        PRAGMA user_version = 6;
+        SQL);
+    }
 }

@@ -120,11 +120,11 @@ function sensor_types(): array
             'limits' => [],
         ],
         'agent' => [
-            'label' => 'Windows-Agent', 'icon' => '🪟', 'unit' => '%', 'interval' => 120,
-            'desc'  => 'PowerShell-Agent (wie bei Spurwerk: herunterladen, ausführen, fertig) meldet CPU, RAM, Laufwerke, Dienste, Updates, Neustart nötig, Ereignis-Fehler, Defender, Netzwerk.',
+            'label' => 'System-Agent (Windows/Linux)', 'icon' => '🖥️', 'unit' => '%', 'interval' => 120,
+            'desc'  => 'Skript auf dem Server (Windows: PowerShell, Linux: Bash + systemd) meldet CPU, RAM, Laufwerke, Dienste, Updates, Neustart nötig, Fehler, Netzwerk und Systeminformationen (Hersteller, Modell, Seriennummer, CPU, IPs …).',
             'fields' => [
                 ['key' => 'primary', 'label' => 'Hauptwert (Kanalname)', 'type' => 'text', 'default' => 'CPU %'],
-                ['key' => 'services', 'label' => 'Zu überwachende Dienste (Komma-getrennt, z. B. DNS,NTDS,MSSQLSERVER)', 'type' => 'text', 'default' => ''],
+                ['key' => 'services', 'label' => 'Zu überwachende Dienste (Komma-getrennt; Windows z. B. DNS,NTDS · Linux z. B. nginx,docker,ssh)', 'type' => 'text', 'default' => ''],
                 ['key' => 'disk_warn', 'label' => 'Laufwerk frei Warnung unter %', 'type' => 'number', 'default' => 15],
                 ['key' => 'disk_err', 'label' => 'Laufwerk frei Fehler unter %', 'type' => 'number', 'default' => 5],
             ],

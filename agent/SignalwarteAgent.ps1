@@ -31,7 +31,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$AgentVersion = '1.1.0'
+$AgentVersion = '1.2.0'
 $TaskName = 'SignalwarteAgent'
 $InstallDir = Join-Path $env:ProgramData 'SignalwarteAgent'
 $InstalledScript = Join-Path $InstallDir 'SignalwarteAgent.ps1'
@@ -197,9 +197,38 @@ function Get-Metrics {
         $ch['Netz Ausgang Mbit/s'] = R ((($net | Measure-Object BytesSentPersec -Sum).Sum) * 8 / 1e6) 3
     } catch { }
 
+    # ---- Systeminformationen (Inventar)
+    $info.platform = 'windows'
+    $info.kernel = "Build $($os.BuildNumber)"
+    $info.arch = $os.OSArchitecture
+    $info.last_boot = $os.LastBootUpTime.ToString('yyyy-MM-dd HH:mm', $Invariant)
+    try { if ($os.InstallDate) { $info.install_date = $os.InstallDate.ToString('yyyy-MM-dd', $Invariant) } } catch { }
     try {
-        $ip = (Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -notlike '127.*' -and $_.IPAddress -notlike '169.254.*' } | Select-Object -First 1).IPAddress
-        if ($ip) { $info.ip = $ip }
+        $cs = Get-CimInstance Win32_ComputerSystem
+        $info.manufacturer = [string]$cs.Manufacturer
+        $info.model = [string]$cs.Model
+        $info.domain = [string]$cs.Domain
+        $info.cores = [int]$cs.NumberOfLogicalProcessors
+        $info.ram_gb = R ($cs.TotalPhysicalMemory / 1GB) 1
+        $info.virtualization = if ($cs.Model -match 'Virtual|VMware|KVM|QEMU|HVM|Standard PC') { [string]$cs.Model } else { 'none' }
+    } catch { }
+    try { $b = Get-CimInstance Win32_BIOS; $info.serial = [string]$b.SerialNumber; $info.bios = [string]$b.SMBIOSBIOSVersion } catch { }
+    try { $info.cpu = ([string](Get-CimInstance Win32_Processor | Select-Object -First 1).Name).Trim() } catch { }
+    try { $info.fqdn = [System.Net.Dns]::GetHostEntry('').HostName } catch { }
+    try { $info.timezone = (Get-TimeZone).Id } catch { }
+    try {
+        $cfgs = Get-NetIPConfiguration -ErrorAction SilentlyContinue | Where-Object { $_.IPv4Address }
+        $info.ip = (($cfgs | ForEach-Object { '{0}={1}/{2}' -f $_.InterfaceAlias, $_.IPv4Address[0].IPAddress, $_.IPv4Address[0].PrefixLength }) | Select-Object -First 8) -join ' '
+        $gwc = $cfgs | Where-Object { $_.IPv4DefaultGateway } | Select-Object -First 1
+        if ($gwc) {
+            $info.gateway = [string]$gwc.IPv4DefaultGateway.NextHop
+            $info.dns = (($gwc.DNSServer | Where-Object { $_.AddressFamily -eq 2 }).ServerAddresses) -join ' '
+        }
+        $info.mac = ((Get-NetAdapter -Physical -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Up' } | ForEach-Object { '{0}={1}' -f $_.Name, $_.MacAddress }) | Select-Object -First 8) -join ' '
+    } catch { }
+    try {
+        $info.disks = @(Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=3' | ForEach-Object {
+            [ordered]@{ mount = $_.DeviceID; device = [string]$_.VolumeName; size_gb = R ($_.Size / 1GB) 1; free_gb = R ($_.FreeSpace / 1GB) 1 } })
     } catch { }
 
     return @{ channels = $ch; services = $services; stopped = $stopped; info = $info }

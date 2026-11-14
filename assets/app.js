@@ -11,42 +11,8 @@
   const ST = () => window.RM_STATUS_TEXT;
   const ORDER = ['down', 'warning', 'acked', 'unknown', 'up', 'paused'];
 
-  // Gerätevorlagen: Sensor-Sets für typische Geräte. {HOST} und {PORT} werden ersetzt.
-  const TEMPLATES = {
-    '': { label: '— keine Vorlage —', sensors: [{ type: 'ping', name: 'Ping' }] },
-    windows: { label: 'Windows-Server', icon: 'windows', sensors: [
-      { type: 'ping', name: 'Ping' }, { type: 'agent', name: 'Windows-Agent' },
-      { type: 'port', name: 'RDP (3389)', config: { port: 3389 } }, { type: 'port', name: 'SMB (445)', config: { port: 445 } }] },
-    dc: { label: 'Windows-Domänencontroller', icon: 'windows', sensors: [
-      { type: 'ping', name: 'Ping' }, { type: 'agent', name: 'Windows-Agent', config: { services: 'NTDS,DNS,Netlogon,KDC,W32Time' } },
-      { type: 'port', name: 'LDAP (389)', config: { port: 389 } }, { type: 'port', name: 'Kerberos (88)', config: { port: 88 } },
-      { type: 'dns', name: 'DNS-Dienst', config: { query: '{HOST}' } }] },
-    linux: { label: 'Linux-Server', icon: 'linux', sensors: [
-      { type: 'ping', name: 'Ping' }, { type: 'port', name: 'SSH (22)', config: { port: 22 } }, { type: 'snmp_system', name: 'SNMP System', optional: true }] },
-    pfsense: { label: 'pfSense / OPNsense', icon: 'firewall', param: { key: 'PORT', label: 'Web-Port', def: 4444 }, sensors: [
-      { type: 'ping', name: 'Ping' },
-      { type: 'http', name: 'Weboberfläche :{PORT}', config: { url: 'https://{HOST}:{PORT}/', verify_ssl: false, expect: '200-499' } },
-      { type: 'ssl', name: 'SSL-Zertifikat :{PORT}', config: { port: '{PORT}' } },
-      { type: 'snmp_system', name: 'SNMP System (CPU/RAM/States)' },
-      { type: 'snmp_custom', name: 'Firewall-States', config: { oid: '1.3.6.1.4.1.12325.1.200.1.3.1.0', unit: 'States' } }], web: 'https://{HOST}:{PORT}/' },
-    fritzbox: { label: 'FRITZ!Box (Internet-Router)', icon: 'fritzbox', sensors: [
-      { type: 'ping', name: 'Ping' }, { type: 'fritzbox', name: 'FRITZ!Box Status', config: { check_wan: true } },
-      { type: 'http', name: 'Weboberfläche', config: { url: 'http://{HOST}/', expect: '200-499' } }], web: 'http://{HOST}/' },
-    fritzrep: { label: 'FRITZ!Repeater / FRITZ!Box als IP-Client', icon: 'wifi', sensors: [
-      { type: 'ping', name: 'Ping' }, { type: 'fritzbox', name: 'FRITZ! Status', config: { check_wan: false } }], web: 'http://{HOST}/' },
-    switch: { label: 'Switch (SNMP)', icon: 'switch', sensors: [{ type: 'ping', name: 'Ping' }, { type: 'snmp_system', name: 'SNMP System' }] },
-    proxmox: { label: 'Proxmox VE', icon: 'hypervisor', sensors: [
-      { type: 'ping', name: 'Ping' }, { type: 'http', name: 'Proxmox-Weboberfläche', config: { url: 'https://{HOST}:8006/', verify_ssl: false } },
-      { type: 'ssl', name: 'SSL-Zertifikat :8006', config: { port: 8006 } }, { type: 'port', name: 'SSH (22)', config: { port: 22 } }], web: 'https://{HOST}:8006/' },
-    nas: { label: 'NAS (Synology/QNAP)', icon: 'nas', sensors: [
-      { type: 'ping', name: 'Ping' }, { type: 'http', name: 'DSM / Weboberfläche', config: { url: 'https://{HOST}:5001/', verify_ssl: false, expect: '200-499' } },
-      { type: 'port', name: 'SMB (445)', config: { port: 445 } }, { type: 'snmp_system', name: 'SNMP System', optional: true }], web: 'https://{HOST}:5001/' },
-    printer: { label: 'Drucker', icon: 'printer', sensors: [
-      { type: 'ping', name: 'Ping' }, { type: 'port', name: 'Druckport (9100)', config: { port: 9100 } },
-      { type: 'http', name: 'Weboberfläche', config: { url: 'http://{HOST}/', expect: '200-499' } }], web: 'http://{HOST}/' },
-    web: { label: 'Webseite / Webanwendung', icon: 'web', sensors: [
-      { type: 'http', name: 'HTTPS', config: { url: 'https://{HOST}/' } }, { type: 'ssl', name: 'SSL-Zertifikat', config: { port: 443 } }], web: 'https://{HOST}/' },
-  };
+  // Gerätevorlagen kommen vom Server (lib/templates.php) – dieselben nutzt auch der MCP-Server.
+  let TEMPLATES = { '': { label: '— keine Vorlage —', sensors: [{ type: 'ping', name: 'Ping' }] } };
   const fillTpl = (v, host, param) => (typeof v === 'string' ? v.replace(/\{HOST\}/g, host).replace(/\{PORT\}/g, param) : v);
   function tplSensors(key, host, param) {
     const t = TEMPLATES[key] || TEMPLATES[''];
@@ -412,7 +378,7 @@
 
   /* ===================================================== Einstellungen */
   async function viewSettings(el, sub) {
-    const tabs = [['notifications', 'Benachrichtigungen'], ['users', 'Benutzer'], ['icons', 'Icons'], ['backup', 'Datensicherung'], ['system', 'System'], ['account', 'Mein Konto']];
+    const tabs = [['notifications', 'Benachrichtigungen'], ['users', 'Benutzer'], ['icons', 'Icons'], ['backup', 'Datensicherung'], ['api', 'API & MCP'], ['system', 'System'], ['account', 'Mein Konto']];
     el.innerHTML = `<div class="page"><div class="pagehead"><h1>Einstellungen</h1></div>
       <div class="subtabs">${tabs.map(([k, l]) => `<a href="#/settings/${k}" class="${sub === k ? 'on' : ''}">${l}</a>`).join('')}</div><div id="setBox"></div></div>`;
     const box = $('#setBox');
@@ -469,6 +435,28 @@
         const fd = Object.fromEntries(new FormData(ev.target));
         try { await api('settings_save', fd); toast('Gespeichert'); } catch (e) { fail(e); }
       });
+    } else if (sub === 'api') {
+      if (!isAdmin()) { box.innerHTML = '<div class="card"><p class="muted">Nur für Administratoren.</p></div>'; return; }
+      const j = await api('api_tokens').catch(fail);
+      if (!j) return;
+      const url = j.mcp_url;
+      box.innerHTML = `<div class="card"><div class="cardhead"><h2>🔌 API-Schlüssel</h2><button class="btn primary" data-act="token-new">+ Neuer Schlüssel</button></div>
+        <p class="muted">Für KI-Agenten (Maik/OpenClaw, Tom/Hermes, Claude) über den MCP-Server. Am besten bekommt jeder Agent einen eigenen Schlüssel – so steht im Protokoll, wer was getan hat.</p>
+        ${j.tokens.length ? `<table class="tbl"><thead><tr><th>Name</th><th>Schlüssel</th><th>Rolle</th><th>Erstellt</th><th>Zuletzt benutzt</th><th></th></tr></thead><tbody>${j.tokens.map((t) => `<tr>
+          <td><b>${esc(t.name)}</b></td><td><code>${esc(t.prefix)}…</code></td><td>${esc(j.roles[t.role] || t.role)}</td><td>${dt(t.created_at)}${t.created_by ? '<div class="sub">' + esc(t.created_by) + '</div>' : ''}</td>
+          <td>${t.last_used ? dt(t.last_used) : '–'}</td><td class="right"><button class="btn sm danger" data-act="token-del" data-id="${t.id}">Widerrufen</button></td></tr>`).join('')}</tbody></table>` : '<p class="empty">Noch keine Schlüssel.</p>'}</div>
+        <div class="card"><h2>🤖 MCP-Server</h2>
+          <p>Adresse (Streamable HTTP): <code>${esc(url)}</code> · Header <code>Authorization: Bearer sw_…</code></p>
+          <div class="cols2"><div><h3>Tom (Hermes) – <code>~/.hermes/config.yaml</code></h3><pre class="code">mcp_servers:
+  signalwarte:
+    url: "${esc(url)}"
+    headers:
+      Authorization: "Bearer \${SIGNALWARTE_API_KEY}"
+    timeout: 180</pre><p class="muted small">Schlüssel in <code>~/.hermes/.env</code> als <code>SIGNALWARTE_API_KEY=sw_…</code>, danach <code>/reload-mcp</code>.</p></div>
+          <div><h3>Maik (OpenClaw)</h3><pre class="code">openclaw mcp set signalwarte '{"url":"${esc(url)}","transport":"streamable-http","headers":{"Authorization":"Bearer \${SIGNALWARTE_API_KEY}"}}'
+openclaw mcp probe signalwarte</pre><h3>Claude Code</h3><pre class="code">claude mcp add --transport http signalwarte ${esc(url)} \
+  --header "Authorization: Bearer sw_…"</pre></div></div>
+          <p class="muted small">Rollen: <b>read</b> = lesen · <b>operate</b> = zusätzlich prüfen, Alarme bestätigen, pausieren · <b>admin</b> = zusätzlich Geräte/Sensoren anlegen, ändern, löschen, Netz scannen, Agenten einrichten. Alle ändernden Aktionen stehen im Protokoll (Typ „mcp“). Ausführliche Anleitung: <code>docs/MCP.md</code>.</p></div>`;
     } else if (sub === 'backup') {
       if (!isAdmin()) { box.innerHTML = '<div class="card"><p class="muted">Nur für Administratoren.</p></div>'; return; }
       box.innerHTML = `<div class="cols2"><div class="card"><h2>⤓ Export</h2>
@@ -594,11 +582,18 @@
           ${lim ? `<dt>Grenzwerte</dt><dd>${lim}</dd>` : ''}
           ${Object.entries(s.channels || {}).map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(fmt(v))}</dd>`).join('')}
         </dl>
-        ${agentUrl ? `<div class="pushbox agentbox"><b>🪟 Windows-Agent installieren</b>
+        ${agentUrl ? (S.agentOs === 'linux' ? `<div class="pushbox agentbox"><div class="ostabs"><button class="fbtn" data-act="agent-os" data-os="windows">🪟 Windows</button><button class="fbtn on" data-act="agent-os" data-os="linux">🐧 Linux</button></div>
+          <b>Linux-Agent installieren</b> (Debian/Ubuntu/RHEL/Alpine, braucht nur bash + curl)
+          <ol><li><a href="${esc(agentUrl)}&os=linux">signalwarte-agent.sh herunterladen</a> und mit <code>sudo bash signalwarte-agent.sh</code> ausführen – oder</li><li>als root auf dem Server einfügen:</li></ol>
+          <textarea readonly rows="2" onclick="this.select()">curl -fsSL '${esc(agentUrl)}&os=linux' -o /tmp/signalwarte-agent.sh && sudo bash /tmp/signalwarte-agent.sh install</textarea>
+          <small>Läuft als systemd-Dienst <code>signalwarte-agent</code> (ohne systemd per Cron). Status: <code>sudo /opt/signalwarte-agent/signalwarte-agent.sh status</code>, Test: <code>… test</code>, Entfernen: <code>… uninstall</code>. Dienste zum Überwachen im Sensor eintragen (z. B. <code>nginx,docker,ssh</code>).</small></div>`
+          : `<div class="pushbox agentbox"><div class="ostabs"><button class="fbtn on" data-act="agent-os" data-os="windows">🪟 Windows</button><button class="fbtn" data-act="agent-os" data-os="linux">🐧 Linux</button></div>
+          <b>Windows-Agent installieren</b>
           <ol><li><a href="${esc(agentUrl)}">SignalwarteAgent.ps1 herunterladen</a> (enthält Server-Adresse und Token) und per Rechtsklick „Mit PowerShell ausführen“ – oder</li>
           <li>in einer <b>Administrator-PowerShell</b> auf dem Server einfügen:</li></ol>
           <textarea readonly rows="3" onclick="this.select()">iwr -UseBasicParsing '${esc(agentUrl)}' -OutFile "$env:TEMP\\SignalwarteAgent.ps1"; powershell -ExecutionPolicy Bypass -File "$env:TEMP\\SignalwarteAgent.ps1"</textarea>
-          <small>Installiert sich nach <code>C:\\ProgramData\\SignalwarteAgent</code> als geplante Aufgabe (SYSTEM). Status: <code>C:\\ProgramData\\SignalwarteAgent\\SignalwarteAgent.ps1 -Status</code>, Test: <code>-Test</code>, Entfernen: <code>-Uninstall</code>. Der Server muss ${esc(location.host)} per HTTPS erreichen.</small></div>` : ''}
+          <small>Installiert sich nach <code>C:\\ProgramData\\SignalwarteAgent</code> als geplante Aufgabe (SYSTEM). Status: <code>C:\\ProgramData\\SignalwarteAgent\\SignalwarteAgent.ps1 -Status</code>, Test: <code>-Test</code>, Entfernen: <code>-Uninstall</code>. Der Server muss ${esc(location.host)} per HTTPS erreichen.</small></div>`) : ''}
+        ${s.sysinfo ? sysinfoHtml(s.sysinfo, s.sysinfo_at) : ''}
         ${pushUrl ? `<div class="pushbox"><b>Push-URL</b><input readonly value="${esc(pushUrl)}&value=42&status=up&msg=OK" onclick="this.select()"><small>Parameter: <code>value</code> (Zahl), <code>status</code> up|warning|down, <code>msg</code> Text. Bleibt die Meldung länger als das Intervall aus, geht der Sensor auf Fehler.</small></div>` : ''}
         <div class="chartbox"><div class="ranges">${[[3600, '1 h'], [86400, '24 h'], [604800, '7 T'], [2592000, '30 T']].map(([r, l]) => `<button class="fbtn${r === range ? ' on' : ''}" data-act="range" data-r="${r}">${l}</button>`).join('')}</div>
           ${chans.length ? `<div class="ranges chans"><button class="fbtn${!S.chartChannel ? ' on' : ''}" data-act="chan" data-c="">Hauptwert</button>${chans.map(([k]) => `<button class="fbtn${S.chartChannel === k ? ' on' : ''}" data-act="chan" data-c="${esc(k)}">${esc(k)}</button>`).join('')}</div>` : ''}<div class="chartwrap"><canvas id="sensorChart"></canvas></div></div>
@@ -648,17 +643,29 @@
     if (!pts.length) cv.parentElement.insertAdjacentHTML('beforeend', '<p class="chart-empty">Noch keine Messwerte im Zeitraum</p>');
   }
 
-  function openDevice(id) {
+  function sysinfoHtml(si, at) {
+    const rows = [['Betriebssystem', si.os], ['Kernel / Build', si.kernel], ['Architektur', si.arch], ['Hersteller', si.manufacturer], ['Modell', si.model],
+      ['Seriennummer', si.serial], ['BIOS', si.bios], ['Virtualisierung', si.virtualization], ['CPU', si.cpu ? si.cpu + (si.cores ? ` (${si.cores} Threads)` : '') : ''],
+      ['RAM', si.ram_gb ? si.ram_gb + ' GB' : ''], ['Hostname', si.fqdn || si.host], ['Domäne', si.domain], ['IP-Adressen', si.ip], ['MAC', si.mac],
+      ['Gateway', si.gateway], ['DNS', si.dns], ['Letzter Start', si.last_boot], ['Installiert am', si.install_date], ['Zeitzone', si.timezone], ['Agent', si.agent ? si.agent + ' (' + (si.platform || '') + ')' : '']]
+      .filter(([, v]) => v !== undefined && v !== null && String(v).trim() !== '' && v !== 'none');
+    const disks = Array.isArray(si.disks) && si.disks.length ? `<table class="tbl"><thead><tr><th>Laufwerk</th><th class="right">Größe</th><th class="right">Frei</th></tr></thead><tbody>${si.disks.map((d) => `<tr><td>${esc(d.mount)}${d.device ? ` <span class="muted small">${esc(d.device)}</span>` : ''}</td><td class="right">${esc(d.size_gb)} GB</td><td class="right">${esc(d.free_gb)} GB</td></tr>`).join('')}</tbody></table>` : '';
+    return `<details class="sysinfo" open><summary>🖥️ Systeminformationen${at ? ` <small class="muted">(${ago(+at)})</small>` : ''}</summary>
+      <dl class="facts">${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>${disks}</details>`;
+  }
+
+  async function openDevice(id) {
     const r = findDevice(id);
     if (!r) return;
     const d = r.d;
     $('#drawerInner').innerHTML = `<div class="dhead st-${d.status}"><div><small>${esc(r.path.filter((x) => x.kind !== 'root').map((x) => x.name).join(' › '))}</small><h2>${RM_ICONS.html(d.icon, 22)} ${esc(d.name)}</h2><span class="badge inv">${ST()[d.status]}</span></div><button class="iconbtn light" data-act="close-drawer">✕</button></div>
       <div class="dbody"><p class="muted">${esc(d.host || '')}</p>
       <div class="dactions">${sensorUrl(d) ? `<a class="btn sm" href="${esc(sensorUrl(d))}" target="_blank" rel="noopener">↗ Weboberfläche öffnen</a>` : ''}${isAdmin() ? `<button class="btn sm" data-act="edit-device" data-id="${d.id}">✎ Bearbeiten</button><button class="btn sm" data-act="add-sensor" data-id="${d.id}">+ Sensor</button>` : ''}</div>
-      ${d.notes ? `<p class="notes">${esc(d.notes)}</p>` : ''}
+      ${d.notes ? `<p class="notes">${esc(d.notes)}</p>` : ''}<div id="devSysinfo"></div>
       <table class="tbl">${d.sensors.map((s) => `<tr class="clickable" data-sensor="${s.id}"><td>${dot(s.status)}</td><td>${esc(s.icon)} ${esc(s.name)}<div class="sub">${esc(s.message || '')}</div></td><td class="right nowrap">${esc(fmtVal(s))}</td></tr>`).join('')}</table></div>`;
     S.drawerSensor = null;
     $('#drawer').hidden = false;
+    api('device', undefined, { id }).then((j) => { const b = $('#devSysinfo'); if (b && j.device.sysinfo) b.innerHTML = sysinfoHtml(j.device.sysinfo, j.device.sysinfo_at); }).catch(() => {});
   }
 
   /* =========================================================== Modals */
@@ -1166,6 +1173,23 @@
         case 'close-modal': closeModal(); break;
         case 'close-modal-go': closeModal(); location.hash = a.getAttribute('href'); break;
         case 'scan': scanDialog(); break;
+        case 'token-new': {
+          const m = modal(`<form><h2>Neuer API-Schlüssel</h2>
+            <label class="f"><span>Name (z. B. Agent)</span><input name="name" required placeholder="maik-openclaw"></label>
+            <label class="f"><span>Rolle</span><select name="role"><option value="read">read – nur lesen</option><option value="operate">operate – lesen + prüfen/bestätigen/pausieren</option><option value="admin">admin – Vollzugriff</option></select></label>
+            <div class="mfoot"><button type="button" class="btn" data-act="close-modal">Abbrechen</button><button class="btn primary">Erstellen</button></div></form>`,
+          async (f) => {
+            const r = await api('api_token_create', { name: f.name.value, role: f.role.value });
+            modal(`<div><h2>🔑 Schlüssel erstellt</h2><p>Nur jetzt sichtbar – sicher ablegen (z. B. Vaultwarden) und beim Agenten als <code>SIGNALWARTE_API_KEY</code> hinterlegen:</p>
+              <input class="tokenshow" readonly value="${esc(r.token)}" onclick="this.select()"><div class="mfoot"><button type="button" class="btn" id="tokCopy">Kopieren</button><button type="button" class="btn primary" data-act="close-modal">Fertig</button></div></div>`);
+            $('#tokCopy').addEventListener('click', () => navigator.clipboard.writeText(r.token).then(() => toast('Kopiert')));
+            route(true);
+            return false;
+          });
+          break;
+        }
+        case 'token-del': if (confirm('Schlüssel widerrufen? Agenten mit diesem Schlüssel verlieren sofort den Zugriff.')) { await api('api_token_delete', { id }); toast('Widerrufen'); route(); } break;
+        case 'agent-os': S.agentOs = a.dataset.os; if (S.drawerSensor) openSensor(S.drawerSensor, true); break;
         case 'export': location.href = 'api.php?action=export' + ($('#expSecrets').checked ? '&secrets=1' : ''); break;
         case 'db-download': location.href = 'api.php?action=db_download'; break;
         case 'auto-map': autoMapDialog(); break;
@@ -1214,7 +1238,7 @@
         }
         case 'device-menu': {
           const d = findDevice(id).d;
-          popMenu(a, [['add-sensor', '+ Sensor hinzufügen', `data-id="${id}"`], ['edit-device', '✎ Bearbeiten', `data-id="${id}"`], ['clone-device', '⧉ Klonen', `data-id="${id}"`],
+          popMenu(a, [['show-device', 'ℹ️ Details & Systeminfo', `data-id="${id}"`], ['add-sensor', '+ Sensor hinzufügen', `data-id="${id}"`], ['edit-device', '✎ Bearbeiten', `data-id="${id}"`], ['clone-device', '⧉ Klonen', `data-id="${id}"`],
             ['pause', d.paused ? '▶ Fortsetzen' : '⏸ Pausieren', `data-obj="device" data-id="${id}" data-p="${d.paused ? 0 : 1}"`], ['check-device', '⟳ Alle Sensoren prüfen', `data-id="${id}"`], ['-'], ['del-device', '🗑 Löschen', `data-id="${id}" class="danger"`]]);
           break;
         }
@@ -1227,6 +1251,7 @@
         case 'add-subgroup': groupForm(null, id); break;
         case 'edit-group': groupForm(id); break;
         case 'edit-device': deviceForm(id); break;
+        case 'show-device': openDevice(id); break;
         case 'clone-device': {
           const host = prompt('Host/IP des neuen Geräts (leer = gleich):', findDevice(id).d.host);
           if (host === null) break;
@@ -1309,6 +1334,7 @@
     try {
       S.boot = await api('bootstrap');
       RM_ICONS.registerCustom(S.boot.icons);
+      if (S.boot.templates) TEMPLATES = S.boot.templates;
       if (!S.boot.user.must_setup_2fa) await loadTree();
       route();
       scheduleRefresh();

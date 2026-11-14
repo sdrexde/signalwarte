@@ -22,6 +22,8 @@ PHP 8 + SQLite + Vanilla JS, keine Build-Tools, kein Framework.
 - **Graphen** (1 h / 24 h / 7 T / 30 T) mit Grenzwert-Linien, Verfügbarkeit, Ø/Min/Max
 - **Benachrichtigungen:** E-Mail, Telegram, Webhook (JSON), ntfy-Push – je für Fehler / Warnung / wieder OK
 - **Maps (draw.io-Bedienung):** Formen, Zonen, 20 Netzwerk-Icons, Geräte/Gruppen/Sensoren per Drag & Drop mit Live-Status, Verbinder (gerade/orthogonal/kurvig) mit Wegpunkten, Linien färben sich nach Status (zweifarbig wie PRTG), Zoom/Pan, Raster & Hilfslinien, Mehrfachauswahl, Ausrichten/Verteilen, Undo/Redo, Copy/Paste, Export PNG/SVG/JSON, **öffentlicher Link für NOC-Wand**
+- **System-Agenten für Windows und Linux:** ein Skript (PowerShell bzw. Bash) meldet CPU, RAM, Laufwerke, Dienste, Updates, Neustart nötig, Netzwerk, Temperatur und **Systeminformationen** (Hersteller, Modell, Seriennummer, CPU, IPs, MACs …) – Download mit eingesetztem Token, Installation mit einem Befehl → [docs/AGENTS.md](docs/AGENTS.md)
+- **MCP-Server für KI-Agenten** (Maik/OpenClaw, Tom/Hermes, Claude): 26 Werkzeuge zum Abfragen **und Verwalten** (Geräte/Sensoren anlegen, Netz scannen, Alarme bestätigen, Agenten einrichten), API-Schlüssel mit Rollen, Protokollierung → [docs/MCP.md](docs/MCP.md)
 - **Benutzer & Rollen:** Administrator / Nur-Lesen, CSRF-Schutz, Passwort-Hashing
 - **Sicherheit:** Zwei-Faktor-Anmeldung (TOTP: Google/Microsoft Authenticator, Aegis, Bitwarden …) mit Wiederherstellungscodes, optional **2FA-Pflicht für alle**, Anmeldesperre nach 5 Fehlversuchen (15 min, pro IP und Benutzer), Abmeldung nach Inaktivität, Anmeldungen im Protokoll
 - Hell/Dunkel-Modus (folgt dem System), mobil nutzbar
@@ -57,12 +59,14 @@ map.php          öffentliche Live-Map (Token-Link, ohne Login)
 public.php       Daten für öffentliche Maps (nur Objekte der Map)
 setup.php        Ersteinrichtung (Admin + optional Beispieldaten), danach gesperrt
 login.php / logout.php
-agent.php        liefert den Windows-Agenten mit eingesetzter URL + Token aus
-agent/           SignalwarteAgent.ps1 (Vorlage, per .htaccess gesperrt)
+agent.php        liefert den Windows-/Linux-Agenten mit eingesetzter URL + Token aus
+agent/           SignalwarteAgent.ps1 + signalwarte-agent.sh (Vorlagen, per .htaccess gesperrt)
+mcp.php          MCP-Server (Streamable HTTP, JSON-RPC, API-Schlüssel mit Rollen)
 cron/poller.php  Probe: prüft fällige Sensoren parallel (pcntl_fork), per Cron jede Minute
 lib/             bootstrap (Config/Auth/Helfer), db (Schema + Migrationen), sensors (Typen + Prüfungen),
                  engine (Status/Baum/Retry), notify (Benachrichtigungen), snmp (SNMP v1/v2c in reinem PHP),
-                 scanner (Netzwerkscanner + Geräteerkennung)
+                 scanner (Netzwerkscanner + Geräteerkennung), templates (Gerätevorlagen), ops (gemeinsame
+                 Operationen für Oberfläche und MCP), apitokens (API-Schlüssel), totp (2FA), transfer (Export/Import)
 assets/          app.js (Oberfläche), mapeditor.js (Map-Editor), icons.js, app.css
 data/            SQLite-Datenbank (nicht im Git, per .htaccess gesperrt)
 ```
@@ -146,22 +150,15 @@ Ohne `--import` startet eine leere Installation mit Ersteinrichtung.
 cd /var/www/html/maik/monitor && git pull && chown -R www-data:www-data .
 ```
 
-## Windows-Server (Agent)
+## System-Agenten (Windows & Linux)
 
-Wie bei Spurwerk: Sensor **„Windows-Agent“** am Gerät anlegen (oder Vorlage „Windows-Server“ / „Domänencontroller“) →
-in den Sensor-Details **SignalwarteAgent.ps1 herunterladen** (Server-Adresse + Token sind eingesetzt) → auf dem Server
-per Rechtsklick „Mit PowerShell ausführen“ oder den angezeigten Einzeiler in einer Administrator-PowerShell einfügen.
+Sensor **„System-Agent (Windows/Linux)“** am Gerät anlegen → in den Sensor-Details Reiter *Windows* oder *Linux* →
+Skript herunterladen bzw. Einzeiler ausführen. Details, gemeldete Werte und Fehlersuche: **[docs/AGENTS.md](docs/AGENTS.md)**.
 
-Der Agent installiert sich nach `C:\ProgramData\SignalwarteAgent`, läuft als geplante Aufgabe unter SYSTEM und meldet:
-CPU %, RAM %, freier Speicher je Laufwerk (% und GB), Laufzeit, Prozesse, gestoppte Auto-Dienste, überwachte Dienste
-(im Sensor eintragen, z. B. `NTDS,DNS,MSSQLSERVER`), Neustart ausstehend, Fehler in der Ereignisanzeige (1 h),
-Tage seit letztem Update, Defender-Status/Signaturalter, Netzwerk ein/aus. Grenzen für Laufwerke im Sensor einstellbar.
+## MCP-Server für KI-Agenten
 
-```powershell
-C:\ProgramData\SignalwarteAgent\SignalwarteAgent.ps1 -Status     # Zustand + Log
-C:\ProgramData\SignalwarteAgent\SignalwarteAgent.ps1 -Test       # Werte anzeigen und senden
-C:\ProgramData\SignalwarteAgent\SignalwarteAgent.ps1 -Uninstall  # entfernen
-```
+`https://<signalwarte>/mcp.php` mit `Authorization: Bearer sw_…` (Schlüssel unter **Einstellungen › API & MCP**).
+Einrichtung für Hermes, OpenClaw und Claude sowie alle Werkzeuge: **[docs/MCP.md](docs/MCP.md)**.
 
 ## pfSense / OPNsense (SNMP)
 

@@ -3,6 +3,8 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/lib/engine.php';
+require_once __DIR__ . '/lib/ops.php';
+require_once __DIR__ . '/lib/apitokens.php';
 
 session_boot();
 $user = current_user();
@@ -28,10 +30,6 @@ function in_int(array $in, string $k): ?int
     return isset($in[$k]) && $in[$k] !== '' && $in[$k] !== null ? (int) $in[$k] : null;
 }
 
-function in_num(array $in, string $k): ?float
-{
-    return isset($in[$k]) && $in[$k] !== '' && $in[$k] !== null && is_numeric($in[$k]) ? (float) $in[$k] : null;
-}
 
 function in_str(array $in, string $k, int $max = 200): string
 {
@@ -93,6 +91,7 @@ try {
                 'version' => APP_VERSION,
                 'icons' => $db->query('SELECT id, name, data FROM icons ORDER BY name')->fetchAll(),
                 'fail_threshold' => (int) setting('fail_threshold', '3'),
+                'templates' => device_templates(),
             ]);
 
         case 'tree':
@@ -118,11 +117,23 @@ try {
             $up->execute([$s['id'], time() - 86400]);
             $s['stats24'] = $up->fetch();
             unset($s['state'], $s['creds']);
+            $si = $db->prepare('SELECT sysinfo, sysinfo_at FROM devices WHERE id = ?');
+            $si->execute([$s['device_id']]);
+            $sir = $si->fetch();
+            $s['sysinfo'] = $sir && $sir['sysinfo'] ? json_decode($sir['sysinfo'], true) : null;
+            $s['sysinfo_at'] = $sir ? $sir['sysinfo_at'] : null;
             $s['channels'] = json_decode((string) $s['last_channels'], true) ?: $s['channels'];
             if (!is_admin()) {
                 unset($s['push_token']);
             }
             json_out(['ok' => true, 'sensor' => $s]);
+
+        case 'device':
+            $st = $db->prepare('SELECT id, name, host, icon, notes, sysinfo, sysinfo_at FROM devices WHERE id = ?');
+            $st->execute([(int) ($_GET['id'] ?? 0)]);
+            $d = $st->fetch() ?: json_err('Gerät nicht gefunden', 404);
+            $d['sysinfo'] = $d['sysinfo'] ? json_decode($d['sysinfo'], true) : null;
+            json_out(['ok' => true, 'device' => $d]);
 
         case 'history':
             $id = (int) ($_GET['id'] ?? 0);
@@ -591,6 +602,22 @@ try {
             log_event('user', "2FA zurückgesetzt für Benutzer #{$id} von {$user['username']}");
             json_out(['ok' => true]);
 
+        case 'api_tokens':
+            if (!is_admin()) {
+                json_err('Nur für Administratoren', 403);
+            }
+            json_out(['ok' => true, 'tokens' => $db->query('SELECT id, name, prefix, role, created_at, created_by, last_used FROM api_tokens ORDER BY created_at DESC')->fetchAll(),
+                'roles' => API_ROLES, 'mcp_url' => public_base_url() . 'mcp.php']);
+
+        case 'api_token_create':
+            $plain = api_token_create(require_name(in_str($in, 'name', 80)), (string) ($in['role'] ?? 'read'), $user['username']);
+            json_out(['ok' => true, 'token' => $plain]);
+
+        case 'api_token_delete':
+            $db->prepare('DELETE FROM api_tokens WHERE id = ?')->execute([(int) $in['id']]);
+            log_event('user', "API-Schlüssel #{$in['id']} gelöscht von {$user['username']}");
+            json_out(['ok' => true]);
+
         case 'excluded_devices':
             require_once __DIR__ . '/lib/scanner.php';
             $ranges = scan_parse_ranges((string) setting('scan_exclude', ''));
@@ -658,56 +685,4 @@ try {
     json_err('Datenbankfehler: ' . $e->getMessage(), 500);
 } catch (InvalidArgumentException $e) {
     json_err($e->getMessage());
-}
-
-function create_sensor(int $deviceId, string $type, string $name, array $config, array $in = []): int
-{
-    $types = sensor_types();
-    $def = $types[$type];
-    $cfg = sensor_normalize_config($type, $config);
-    $lim = $def['limits'];
-    $pick = fn($k) => array_key_exists($k, $in) ? in_num($in, $k) : ($lim[$k] ?? null);
-    if ($name === '') {
-        $name = $def['label'];
-        if ($type === 'port') {
-            $name = 'Port ' . $cfg['port'];
-        } elseif ($type === 'http' && $cfg['url']) {
-            $name = 'HTTP ' . (parse_url($cfg['url'], PHP_URL_HOST) ?: $cfg['url']);
-        }
-    }
-    db()->prepare('INSERT INTO sensors(device_id, name, type, config, interval_s, warn_max, err_max, warn_min, err_min, status_since, push_token, next_check) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)')
-        ->execute([$deviceId, $name, $type, json_encode($cfg, JSON_UNESCAPED_UNICODE),
-            $iv = max(10, (int) ($in['interval_s'] ?? $def['interval'])),
-            $pick('warn_max'), $pick('err_max'), $pick('warn_min'), $pick('err_min'), time(),
-            in_array($type, PUSH_TYPES, true) ? random_token() : null,
-            in_array($type, PUSH_TYPES, true) ? time() + $iv : 0]);
-    return (int) db()->lastInsertId();
-}
-
-/** Auto-Discovery für ein Gerät: nutzt den Netzwerkscanner (Ports, HTTP-Titel, Gerätetyp). */
-function discover_host(string $host): array
-{
-    require_once __DIR__ . '/lib/scanner.php';
-    $ip = filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) ? $host : gethostbyname($host);
-    if (!filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
-        json_err('Host nicht auflösbar (IPv4)');
-    }
-    $res = scan_network([$ip], [], true);
-    if (!$res) {
-        return ['found' => [], 'meta' => null];
-    }
-    $h = $res[0];
-    $found = [];
-    foreach ($h['sensors'] as $s) {
-        $cfg = $s['config'];
-        // Hostname statt IP in URLs verwenden, wenn so eingegeben
-        if ($ip !== $host && isset($cfg['url'])) {
-            $cfg['url'] = str_replace('://' . $ip, '://' . $host, $cfg['url']);
-        }
-        $found[] = ['type' => $s['type'], 'name' => $s['name'], 'config' => $cfg, 'optional' => !empty($s['optional']),
-            'info' => $s['type'] === 'ping' ? ($h['ping'] !== null ? $h['ping'] . ' ms' : 'keine Antwort') : (!empty($s['optional']) ? 'benötigt SNMP/Agent' : 'erkannt')];
-    }
-    $meta = ['type' => $h['type'], 'icon' => $h['icon'], 'template' => $h['template'], 'web_url' => $ip !== $host ? str_replace('://' . $ip, '://' . $host, $h['web_url']) : $h['web_url'],
-        'name' => $h['hostname'] ? preg_replace('/\..*$/', '', $h['hostname']) : $h['name'], 'ports' => $h['port_names'], 'vendor' => $h['vendor'], 'mac' => $h['mac']];
-    return ['found' => $found, 'meta' => $meta];
 }
