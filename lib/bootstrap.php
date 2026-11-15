@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 const APP_NAME    = 'Signalwarte';
-const APP_VERSION = '1.6.1';
+const APP_VERSION = '1.6.2';
 define('APP_ROOT', dirname(__DIR__));
 define('DATA_DIR', getenv('RM_DATA_DIR') ?: APP_ROOT . '/data');
 

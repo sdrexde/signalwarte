@@ -65,6 +65,19 @@ if ($s['type'] === 'agent') {
     if (($channels['Dienste fehlgeschlagen'] ?? 0) > 0) {
         $bump('warning', $channels['Dienste fehlgeschlagen'] . ' systemd-Dienst(e) fehlgeschlagen' . (!empty($json['failed']) ? ' (' . mb_substr(implode(', ', (array) $json['failed']), 0, 150) . ')' : ''));
     }
+    // gestoppte Auto-Dienste: Ausnahmen (Sensor-Einstellung + globale Standardliste) herausrechnen
+    if (isset($channels['Auto-Dienste gestoppt']) && is_array($json['stopped'] ?? null)) {
+        $ign = array_filter(array_map('trim', explode(',', (string) ($cfg['ignore_stopped'] ?? '') . ',' . (string) setting('agent_ignore_stopped', 'Avira*Updater*,AviraFallback*,GoogleUpdate*,MozillaMaintenance,BITS,gupdate*,edgeupdate*,sppsvc,RemoteRegistry'))));
+        $json['stopped'] = array_values(array_filter((array) $json['stopped'], function ($n) use ($ign) {
+            foreach ($ign as $p) {
+                if (fnmatch($p, (string) $n, FNM_CASEFOLD)) {
+                    return false;
+                }
+            }
+            return true;
+        }));
+        $channels['Auto-Dienste gestoppt'] = count($json['stopped']);
+    }
     if (($channels['Auto-Dienste gestoppt'] ?? 0) > 0) {
         $bump('warning', ($channels['Auto-Dienste gestoppt']) . ' automatische Dienste gestoppt' . (!empty($json['stopped']) ? ' (' . mb_substr(implode(', ', (array) $json['stopped']), 0, 150) . ')' : ''));
     }
