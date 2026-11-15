@@ -31,7 +31,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$AgentVersion = '1.3.0'
+$AgentVersion = '1.3.1'
 $TaskName = 'SignalwarteAgent'
 $InstallDir = Join-Path $env:ProgramData 'SignalwarteAgent'
 $InstalledScript = Join-Path $InstallDir 'SignalwarteAgent.ps1'
@@ -108,7 +108,8 @@ function Initialize-Tls {
     } catch { }
 }
 
-function R($v, [int]$d = 1) { return [math]::Round([double]$v, $d) }
+# Hinweis: nicht 'R' nennen – 'r' ist in PowerShell ein Alias fuer Invoke-History (Aliase gehen vor Funktionen)
+function Get-Rounded($v, [int]$d = 1) { return [math]::Round([double]$v, $d) }
 
 # ============================================================================ Messwerte sammeln
 function Get-Metrics {
@@ -122,20 +123,20 @@ function Get-Metrics {
     $info.host = $env:COMPUTERNAME
     $info.agent = $AgentVersion
 
-    try { $ch['CPU %'] = R ((Get-CimInstance Win32_Processor | Measure-Object -Property LoadPercentage -Average).Average) } catch { }
+    try { $ch['CPU %'] = Get-Rounded ((Get-CimInstance Win32_Processor | Measure-Object -Property LoadPercentage -Average).Average) } catch { }
     $total = [double]$os.TotalVisibleMemorySize
     if ($total -gt 0) {
-        $ch['RAM %'] = R ((($total - [double]$os.FreePhysicalMemory) / $total) * 100)
-        $ch['RAM frei GB'] = R ([double]$os.FreePhysicalMemory / 1MB) 2
-        $ch['RAM gesamt GB'] = R ($total / 1MB) 1
+        $ch['RAM %'] = Get-Rounded ((($total - [double]$os.FreePhysicalMemory) / $total) * 100)
+        $ch['RAM frei GB'] = Get-Rounded ([double]$os.FreePhysicalMemory / 1MB) 2
+        $ch['RAM gesamt GB'] = Get-Rounded ($total / 1MB) 1
     }
-    $ch['Laufzeit (Tage)'] = R (((Get-Date) - $os.LastBootUpTime).TotalDays) 2
+    $ch['Laufzeit (Tage)'] = Get-Rounded (((Get-Date) - $os.LastBootUpTime).TotalDays) 2
     try { $ch['Prozesse'] = (Get-Process).Count } catch { }
 
     foreach ($d in (Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=3')) {
         if ($d.Size -gt 0) {
-            $ch["Frei $($d.DeviceID) %"] = R (($d.FreeSpace / $d.Size) * 100)
-            $ch["Frei $($d.DeviceID) GB"] = R ($d.FreeSpace / 1GB)
+            $ch["Frei $($d.DeviceID) %"] = Get-Rounded (($d.FreeSpace / $d.Size) * 100)
+            $ch["Frei $($d.DeviceID) GB"] = Get-Rounded ($d.FreeSpace / 1GB)
         }
     }
 
@@ -175,7 +176,7 @@ function Get-Metrics {
     if (-not $State['hotfix_at'] -or ($now - [datetime]$State['hotfix_at']).TotalMinutes -gt 60) {
         try {
             $last = Get-HotFix | Where-Object { $_.InstalledOn } | Sort-Object InstalledOn -Descending | Select-Object -First 1
-            if ($last) { $State['hotfix_days'] = R (($now - $last.InstalledOn).TotalDays) 0; $State['hotfix_id'] = $last.HotFixID }
+            if ($last) { $State['hotfix_days'] = Get-Rounded (($now - $last.InstalledOn).TotalDays) 0; $State['hotfix_id'] = $last.HotFixID }
         } catch { }
         $State['hotfix_at'] = $now.ToString('o')
     }
@@ -219,8 +220,8 @@ function Get-Metrics {
     # Netzwerk (aktuelle Rate ueber alle Adapter)
     try {
         $net = Get-CimInstance Win32_PerfFormattedData_Tcpip_NetworkInterface
-        $ch['Netz Eingang Mbit/s'] = R ((($net | Measure-Object BytesReceivedPersec -Sum).Sum) * 8 / 1e6) 3
-        $ch['Netz Ausgang Mbit/s'] = R ((($net | Measure-Object BytesSentPersec -Sum).Sum) * 8 / 1e6) 3
+        $ch['Netz Eingang Mbit/s'] = Get-Rounded ((($net | Measure-Object BytesReceivedPersec -Sum).Sum) * 8 / 1e6) 3
+        $ch['Netz Ausgang Mbit/s'] = Get-Rounded ((($net | Measure-Object BytesSentPersec -Sum).Sum) * 8 / 1e6) 3
     } catch { }
 
     # ---- Systeminformationen (Inventar)
@@ -235,7 +236,7 @@ function Get-Metrics {
         $info.model = [string]$cs.Model
         $info.domain = [string]$cs.Domain
         $info.cores = [int]$cs.NumberOfLogicalProcessors
-        $info.ram_gb = R ($cs.TotalPhysicalMemory / 1GB) 1
+        $info.ram_gb = Get-Rounded ($cs.TotalPhysicalMemory / 1GB) 1
         $info.virtualization = if ($cs.Model -match 'Virtual|VMware|KVM|QEMU|HVM|Standard PC') { [string]$cs.Model } else { 'none' }
     } catch { }
     try { $b = Get-CimInstance Win32_BIOS; $info.serial = [string]$b.SerialNumber; $info.bios = [string]$b.SMBIOSBIOSVersion } catch { }
@@ -254,7 +255,7 @@ function Get-Metrics {
     } catch { }
     try {
         $info.disks = @(Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=3' | ForEach-Object {
-            [ordered]@{ mount = $_.DeviceID; device = [string]$_.VolumeName; size_gb = R ($_.Size / 1GB) 1; free_gb = R ($_.FreeSpace / 1GB) 1 } })
+            [ordered]@{ mount = $_.DeviceID; device = [string]$_.VolumeName; size_gb = Get-Rounded ($_.Size / 1GB) 1; free_gb = Get-Rounded ($_.FreeSpace / 1GB) 1 } })
     } catch { }
 
     return @{ channels = $ch; services = $services; stopped = $stopped; info = $info }
