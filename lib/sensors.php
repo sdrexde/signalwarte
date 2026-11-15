@@ -123,13 +123,21 @@ function sensor_types(): array
             'label' => 'System-Agent (Windows/Linux)', 'icon' => '🖥️', 'unit' => '%', 'interval' => 120,
             'desc'  => 'Skript auf dem Server (Windows: PowerShell, Linux: Bash + systemd) meldet CPU, RAM, Laufwerke, Dienste, Updates, Neustart nötig, Fehler, Netzwerk und Systeminformationen (Hersteller, Modell, Seriennummer, CPU, IPs …).',
             'fields' => [
-                ['key' => 'primary', 'label' => 'Hauptwert (Kanalname)', 'type' => 'text', 'default' => 'CPU %'],
+                ['key' => 'primary', 'label' => 'Hauptwert (wird in Kachel und Graph angezeigt)', 'type' => 'channel', 'default' => 'CPU %'],
                 ['key' => 'services', 'label' => 'Zu überwachende Dienste (Komma-getrennt; Windows z. B. DNS,NTDS · Linux z. B. nginx,docker,ssh)', 'type' => 'text', 'default' => ''],
                 ['key' => 'ignore_stopped', 'label' => 'Gestoppte Auto-Dienste ignorieren (Komma-getrennt, * erlaubt, z. B. Avira*,edgeupdate)', 'type' => 'text', 'default' => ''],
                 ['key' => 'disk_warn', 'label' => 'Laufwerk frei Warnung unter %', 'type' => 'number', 'default' => 15],
                 ['key' => 'disk_err', 'label' => 'Laufwerk frei Fehler unter %', 'type' => 'number', 'default' => 5],
             ],
             'limits' => ['warn_max' => 90, 'err_max' => null],
+        ],
+        'agent_channel' => [
+            'label' => 'Agent-Wert (einzelner Wert)', 'icon' => '📈', 'unit' => '', 'interval' => 60,
+            'desc'  => 'Zeigt einen einzelnen Wert des System-Agenten als eigenen Sensor – z. B. nur RAM, nur Festplatte C: oder nur Sicherheitsupdates – mit eigenen Grenzwerten, Alarmen und Verlauf. Benötigt einen System-Agent am selben Gerät.',
+            'fields' => [
+                ['key' => 'channel', 'label' => 'Wert vom System-Agent', 'type' => 'channel', 'default' => 'RAM %'],
+            ],
+            'limits' => [],
         ],
         'cpu' => [
             'label' => 'CPU-Last (Probe)', 'icon' => '🧠', 'unit' => '%', 'interval' => 60,
@@ -203,6 +211,7 @@ function sensor_check(array $sensor): array
             'snmp_traffic' => check_snmp_traffic($host, $cfg, $sensor),
             'snmp_custom' => check_snmp_custom($host, $cfg, $sensor),
             'fritzbox'  => check_fritzbox($host, $cfg, $sensor),
+            'agent_channel' => check_agent_channel($cfg, $sensor),
             'cpu'       => check_cpu(),
             'memory'    => check_memory(),
             'disk'      => check_disk($cfg),
@@ -717,6 +726,78 @@ function check_snmp_custom(string $host, array $cfg, array $sensor): array
     return r_ok($val, $unit, "{$val} {$unit}");
 }
 
+/* ============================================================ Agent-Wert */
+
+/** Einheit aus dem Kanalnamen ableiten („RAM %“ → %, „Frei C: GB“ → GB …). */
+function channel_unit(string $ch): string
+{
+    foreach (['%' => '/ %$/u', 'GB' => '/ GB$/u', 'MB' => '/ MB$/u', 'Mbit/s' => '/Mbit\/s$/u', 'Tage' => '/\(Tage\)$/u', '°C' => '/°C$/u'] as $u => $re) {
+        if (preg_match($re, $ch)) {
+            return $u;
+        }
+    }
+    return '';
+}
+
+/** Empfohlene Grenzwerte und Anzeigename für einen Agent-Kanal. */
+function channel_defaults(string $ch): array
+{
+    $rules = [
+        ['/^CPU %$/u', 'CPU-Last', ['warn_max' => 80, 'err_max' => 95]],
+        ['/^RAM %$/u', 'Arbeitsspeicher', ['warn_max' => 85, 'err_max' => 95]],
+        ['/^Swap %$/u', 'Swap', ['warn_max' => 50]],
+        ['/^Frei (.+) %$/u', 'Festplatte $1 frei', ['warn_min' => 15, 'err_min' => 5]],
+        ['/^Frei (.+) GB$/u', 'Festplatte $1 frei (GB)', []],
+        ['/^Sicherheitsupdates$/u', 'Sicherheitsupdates', ['warn_max' => 0]],
+        ['/^Kritische Updates$/u', 'Kritische Updates', ['warn_max' => 0]],
+        ['/^Updates ausstehend$/u', 'Updates ausstehend', []],
+        ['/^Neustart ausstehend$/u', 'Neustart ausstehend', ['warn_max' => 0]],
+        ['/^Auto-Dienste gestoppt$/u', 'Gestoppte Auto-Dienste', ['warn_max' => 0]],
+        ['/^Dienste fehlgeschlagen$/u', 'Fehlgeschlagene Dienste', ['warn_max' => 0]],
+        ['/^Tage seit letztem Update$/u', 'Tage seit letztem Update', ['warn_max' => 45]],
+        ['/^Defender aktiv$/u', 'Defender Echtzeitschutz', ['err_min' => 1]],
+        ['/^Defender Signatur \(Tage\)$/u', 'Defender-Signatur (Alter)', ['warn_max' => 3]],
+        ['/^CPU-Temperatur/u', 'CPU-Temperatur', ['warn_max' => 80, 'err_max' => 90]],
+    ];
+    foreach ($rules as [$re, $name, $lim]) {
+        if (preg_match($re, $ch, $m)) {
+            return ['name' => preg_replace('/\$1/', $m[1] ?? '', $name), 'limits' => $lim];
+        }
+    }
+    return ['name' => $ch, 'limits' => []];
+}
+
+/** Wert aus der letzten Meldung des System-Agenten am selben Gerät. */
+function check_agent_channel(array $cfg, array $sensor): array
+{
+    $ch = trim((string) ($cfg['channel'] ?? ''));
+    if ($ch === '') {
+        return r_fail('Kein Wert ausgewählt');
+    }
+    $st = db()->prepare("SELECT status, last_check, last_channels, interval_s FROM sensors WHERE device_id = ? AND type = 'agent' AND paused = 0 ORDER BY last_check DESC LIMIT 1");
+    $st->execute([$sensor['device_id']]);
+    $a = $st->fetch();
+    if (!$a) {
+        return r_fail('Kein System-Agent an diesem Gerät');
+    }
+    if (!$a['last_check']) {
+        $r = r_ok(null, channel_unit($ch), 'Warte auf erste Meldung des System-Agenten');
+        $r['status'] = 'unknown';
+        return $r;
+    }
+    $age = time() - (int) $a['last_check'];
+    if ($age > (int) (max(10, (int) $a['interval_s']) * 1.5) + 60) {
+        return r_fail('System-Agent meldet sich nicht (letzte Meldung vor ' . round($age / 60) . ' min)');
+    }
+    $chs = json_decode((string) $a['last_channels'], true) ?: [];
+    if (!array_key_exists($ch, $chs)) {
+        return r_fail("Wert „{$ch}“ wird vom Agenten nicht gemeldet");
+    }
+    $v = (float) $chs[$ch];
+    $u = channel_unit($ch);
+    return r_ok($v, $u, $ch . ': ' . rtrim(rtrim(number_format($v, 2, ',', '.'), '0'), ',') . ($u ? " {$u}" : ''));
+}
+
 /* =============================================================== FRITZ!Box */
 
 function tr064_call(string $host, int $port, string $path, string $service, string $action, ?array $auth = null): ?array
@@ -859,7 +940,7 @@ function apply_limits(array $r, array $s): array
         if ($s[$key] !== null && $s[$key] !== '' && $test((float) $s[$key])) {
             if (STATUS_PRIO[$st] > STATUS_PRIO[$r['status']]) {
                 $r['status'] = $st;
-                $r['message'] = sprintf('%s %s (%s %s) – %s', rtrim(rtrim(number_format($v, 2, '.', ''), '0'), '.'), $r['unit'], $txt, $s[$key], $r['message']);
+                $r['message'] = sprintf('%s%s (%s %s) – %s', rtrim(rtrim(number_format($v, 2, '.', ''), '0'), '.'), $r['unit'] !== '' ? ' ' . $r['unit'] : '', $txt, $s[$key] + 0, $r['message']);
             }
             break;
         }

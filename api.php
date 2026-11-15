@@ -603,6 +603,58 @@ try {
             log_event('user', "2FA zurückgesetzt für Benutzer #{$id} von {$user['username']}");
             json_out(['ok' => true]);
 
+        case 'agent_channels':
+            // Werte, die der System-Agent eines Geräts liefert, + Vorschläge (Name, Grenzwerte) + bereits angelegte Einzelsensoren
+            $did = (int) ($_GET['device_id'] ?? 0);
+            $st = $db->prepare("SELECT last_channels FROM sensors WHERE device_id = ? AND type = 'agent' ORDER BY last_check DESC LIMIT 1");
+            $st->execute([$did]);
+            $chs = json_decode((string) $st->fetchColumn(), true) ?: [];
+            $existing = [];
+            $ex = $db->prepare("SELECT id, config FROM sensors WHERE device_id = ? AND type = 'agent_channel'");
+            $ex->execute([$did]);
+            foreach ($ex->fetchAll() as $e) {
+                $c = json_decode($e['config'], true) ?: [];
+                if (!empty($c['channel'])) {
+                    $existing[$c['channel']] = (int) $e['id'];
+                }
+            }
+            $out = [];
+            foreach ($chs as $k => $v) {
+                if (!is_numeric($v)) {
+                    continue;
+                }
+                $d = channel_defaults((string) $k);
+                $out[] = ['channel' => $k, 'value' => $v, 'unit' => channel_unit((string) $k), 'name' => $d['name'], 'limits' => $d['limits'], 'sensor_id' => $existing[$k] ?? null];
+            }
+            json_out(['ok' => true, 'channels' => $out, 'has_agent' => (bool) $chs]);
+
+        case 'agent_channels_add':
+            $did = (int) ($in['device_id'] ?? 0);
+            $chk = $db->prepare('SELECT id FROM devices WHERE id = ?');
+            $chk->execute([$did]);
+            if (!$chk->fetchColumn()) {
+                json_err('Gerät nicht gefunden', 404);
+            }
+            $ex = $db->prepare("SELECT config FROM sensors WHERE device_id = ? AND type = 'agent_channel'");
+            $ex->execute([$did]);
+            $have = [];
+            foreach ($ex->fetchAll(PDO::FETCH_COLUMN) as $c) {
+                $have[(json_decode($c, true) ?: [])['channel'] ?? ''] = true;
+            }
+            $created = [];
+            foreach ((array) ($in['channels'] ?? []) as $ch) {
+                $ch = mb_substr(trim((string) $ch), 0, 60);
+                if ($ch === '' || isset($have[$ch])) {
+                    continue;
+                }
+                $d = channel_defaults($ch);
+                $id = create_sensor($did, 'agent_channel', $d['name'], ['channel' => $ch], $d['limits'] + ['interval_s' => 60]);
+                $created[] = $id;
+                $have[$ch] = true;
+            }
+            log_event('user', count($created) . " Agent-Wert-Sensoren angelegt von {$user['username']}", null, $did);
+            json_out(['ok' => true, 'created' => $created]);
+
         case 'agents':
             $rows = $db->query("SELECT s.id sensor_id, s.status, s.acked, s.paused, s.last_check, s.last_message, s.last_channels, s.push_token, s.interval_s,
                 d.id device_id, d.name device, d.host, d.paused dpaused, d.sysinfo, d.sysinfo_at

@@ -103,6 +103,22 @@ Betriebssystem, Kernel/Build, Architektur, Hersteller, Modell, Seriennummer, BIO
 Hostname/FQDN, Domäne (Windows), IP-Adressen, MAC-Adressen, Gateway, DNS, letzter Start, Installationsdatum (Windows),
 Zeitzone, Laufwerke mit Größe/frei, Agent-Version.
 
+## Einzelne Werte als eigene Sensoren (z. B. nur RAM oder nur Festplatte C:)
+
+Der System-Agent liefert alle Werte gesammelt. Für einen einzelnen Wert mit **eigenem Grenzwert, Alarm, Verlauf und
+eigener Kachel** (auch in Maps):
+
+- **Am schnellsten:** System-Agent-Sensor öffnen → hinter jedem Wert **„＋ Sensor“** klicken, oder oben
+  **„＋ Standard-Sensoren anlegen“** (CPU, RAM, alle Festplatten in %, Sicherheitsupdates, kritische Updates, Neustart, fehlgeschlagene Dienste).
+- **Manuell:** Gerät → „+ Sensor“ → Typ **„Agent-Wert (einzelner Wert)“** → Wert aus der **Auswahlliste** wählen (dort
+  stehen alle Werte, die der Agent dieses Geräts meldet, mit aktuellem Stand). Name und Grenzwerte werden vorgeschlagen.
+
+Vorgeschlagene Grenzwerte: CPU > 80/95 %, RAM > 85/95 %, Festplatte frei < 15/5 %, Swap > 50 %, Sicherheitsupdates/
+kritische Updates/Neustart/fehlgeschlagene Dienste > 0 → Warnung, Tage seit letztem Update > 45, Defender aus → Fehler,
+CPU-Temperatur > 80/90 °C. Meldet der Agent nicht mehr, gehen auch die Einzelsensoren auf Fehler.
+
+Auch der **Hauptwert** des System-Agent-Sensors (was Kachel und Graph zeigen) wird jetzt aus dieser Liste gewählt.
+
 ## Funktionsweise
 
 - Der Agent sendet alle *Intervall* Sekunden (Sensor-Einstellung, Standard 120 s) ein JSON an `push.php?token=…`.

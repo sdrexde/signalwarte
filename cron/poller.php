@@ -65,7 +65,7 @@ function run_batch(array $due, int $maxWorkers, bool $verbose): void
     $local = [];
     $remote = [];
     foreach ($due as $s) {
-        if (in_array($s['type'], PUSH_TYPES, true) || !empty($s['depends_on'])) {
+        if (in_array($s['type'], PUSH_TYPES, true) || $s['type'] === 'agent_channel' || !empty($s['depends_on'])) {
             $local[] = $s;
         } else {
             $remote[] = $s;

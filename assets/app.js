@@ -626,6 +626,7 @@ openclaw mcp probe signalwarte</pre><h3>Claude Code</h3><pre class="code">claude
           <button class="btn sm" data-act="edit-sensor" data-id="${s.id}">✎ Bearbeiten</button>
           <button class="btn sm danger" data-act="del-sensor" data-id="${s.id}">Löschen</button>` : ''}
           ${webUrl ? `<a class="btn sm" href="${esc(webUrl)}" target="_blank" rel="noopener">↗ Öffnen</a>` : ''}
+          ${s.type === 'agent' && isAdmin() && Object.keys(s.channels || {}).length ? `<button class="btn sm" data-act="ch-std" data-dev="${s.device_id}" title="CPU, RAM, alle Festplatten, Sicherheitsupdates und Neustart als eigene Sensoren">＋ Standard-Sensoren anlegen</button>` : ''}
         </div>
         <div class="bigval"><span class="v t-${st}">${s.last_value !== null ? fmt(+s.last_value) : '–'}</span><span class="u">${esc(s.last_unit || '')}</span></div>
         <p class="dmsg">${esc(s.last_message || 'Noch keine Messung')}</p>
@@ -636,7 +637,7 @@ openclaw mcp probe signalwarte</pre><h3>Claude Code</h3><pre class="code">claude
           <dt>Verfügbarkeit 24 h</dt><dd>${uptime !== null ? uptime.toLocaleString('de-DE') + ' %' : '–'}</dd>
           <dt>Ø / Min / Max 24 h</dt><dd>${fmt(s.stats24 && s.stats24.avg !== null ? +s.stats24.avg : null)} / ${fmt(s.stats24 && s.stats24.min !== null ? +s.stats24.min : null)} / ${fmt(s.stats24 && s.stats24.max !== null ? +s.stats24.max : null)}</dd>
           ${lim ? `<dt>Grenzwerte</dt><dd>${lim}</dd>` : ''}
-          ${Object.entries(s.channels || {}).map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(fmt(v))}</dd>`).join('')}
+          ${Object.entries(s.channels || {}).map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(fmt(v))}${s.type === 'agent' && isAdmin() && typeof v === 'number' ? ` <button class="chadd" data-act="ch-add" data-ch="${esc(k)}" data-dev="${s.device_id}" title="Als eigenen Sensor anlegen (mit eigenen Grenzwerten und Alarm)">＋ Sensor</button>` : ''}</dd>`).join('')}
         </dl>
         ${agentUrl ? (S.agentOs === 'linux' ? `<div class="pushbox agentbox"><div class="ostabs"><button class="fbtn" data-act="agent-os" data-os="windows">🪟 Windows</button><button class="fbtn on" data-act="agent-os" data-os="linux">🐧 Linux</button></div>
           <b>Linux-Agent installieren</b> (Debian/Ubuntu/RHEL/Alpine, braucht nur bash + curl)
@@ -658,6 +659,15 @@ openclaw mcp probe signalwarte</pre><h3>Claude Code</h3><pre class="code">claude
     $('#drawer').hidden = false;
     if (!wasOpen) $('#drawer').scrollTop = 0;
     drawChart(s, range, S.chartChannel || '');
+    if (s.type === 'agent' && isAdmin()) {
+      api('agent_channels', undefined, { device_id: s.device_id }).then((j) => {
+        for (const c of j.channels) {
+          if (!c.sensor_id) continue;
+          const b = [...document.querySelectorAll('.chadd')].find((x) => x.dataset.ch === c.channel);
+          if (b) b.outerHTML = `<a href="#" class="chhas" data-sensor="${c.sensor_id}" title="Eigener Sensor vorhanden">✓ Sensor</a>`;
+        }
+      }).catch(() => {});
+    }
   }
 
   async function drawChart(s, range, channel) {
@@ -747,9 +757,21 @@ openclaw mcp probe signalwarte</pre><h3>Claude Code</h3><pre class="code">claude
   function closeModal() { $('#modalBack').hidden = true; $('#modal').innerHTML = ''; }
 
   const opt = (v, l, sel) => `<option value="${esc(v)}"${String(sel) === String(v) ? ' selected' : ''}>${esc(l)}</option>`;
-  function fieldHtml(f, val) {
+  // Standard-Werte der Agenten (falls das Gerät noch nicht gemeldet hat)
+  const COMMON_CHANNELS = ['CPU %', 'RAM %', 'Swap %', 'Frei C: %', 'Frei D: %', 'Frei / %', 'Updates ausstehend', 'Sicherheitsupdates', 'Kritische Updates',
+    'Neustart ausstehend', 'Auto-Dienste gestoppt', 'Dienste fehlgeschlagen', 'Tage seit letztem Update', 'Laufzeit (Tage)', 'Load 1m', 'CPU-Temperatur °C',
+    'Netz Eingang Mbit/s', 'Netz Ausgang Mbit/s', 'Defender aktiv', 'Ereignis-Fehler 1h'];
+  function fieldHtml(f, val, ctx = {}) {
     const v = val !== undefined ? val : f.default;
     const name = `cfg_${f.key}`;
+    if (f.type === 'channel') {
+      const live = (ctx.channels || []).map((c) => c.channel);
+      const list = live.length ? live : COMMON_CHANNELS;
+      const all = list.includes(v) || !v ? list : [v, ...list];
+      const label = (c) => { const x = (ctx.channels || []).find((y) => y.channel === c); return x ? `${c}  (aktuell ${fmt(x.value)}${x.unit ? ' ' + x.unit : ''})` : c; };
+      return `<label class="f"><span>${esc(f.label)}</span><select name="${name}" data-channel="1">${all.map((c) => opt(c, label(c), v)).join('')}</select>
+        <small class="muted">${live.length ? 'Werte aus der letzten Meldung des System-Agenten dieses Geräts.' : 'Noch keine Meldung eines System-Agenten an diesem Gerät – Standardliste. Nach der ersten Meldung stehen hier alle echten Werte (z. B. jedes Laufwerk).'}</small></label>`;
+    }
     if (f.type === 'bool') return `<label class="f check"><input type="checkbox" name="${name}"${v ? ' checked' : ''}> ${esc(f.label)}</label>`;
     if (f.type === 'select') return `<label class="f"><span>${esc(f.label)}</span><select name="${name}">${f.options.map((o) => opt(o, o, v)).join('')}</select></label>`;
     return `<label class="f"><span>${esc(f.label)}</span><input name="${name}" type="${f.type === 'number' ? 'number' : 'text'}" value="${esc(v ?? '')}"${f.type === 'number' ? ' step="any"' : ''}></label>`;
@@ -971,11 +993,16 @@ openclaw mcp probe signalwarte</pre><h3>Claude Code</h3><pre class="code">claude
     const type = s ? s.type : presetType;
     const t = types[type];
     const cfg = s ? s.config : {};
+    let ctx = {};
+    if (t.fields.some((f) => f.type === 'channel')) {
+      try { ctx = await api('agent_channels', undefined, { device_id: s ? s.device_id : deviceId }); } catch (e) { ctx = {}; }
+    }
     const lim = (k) => (s ? (s[k] ?? '') : (t.limits[k] ?? ''));
     modal(`<form><h2>${t.icon} ${s ? 'Sensor bearbeiten' : t.label + '-Sensor anlegen'}</h2><p class="muted">${esc(t.desc)}</p>
       <div class="grid2"><label class="f"><span>Name</span><input name="name" value="${esc(s ? s.name : '')}" placeholder="${esc(t.label)}"></label>
       <label class="f"><span>Prüfintervall</span><select name="interval_s">${[[10, '10 Sekunden'], [30, '30 Sekunden'], [60, '1 Minute'], [120, '2 Minuten'], [300, '5 Minuten'], [600, '10 Minuten'], [900, '15 Minuten'], [3600, '1 Stunde'], [21600, '6 Stunden'], [86400, '24 Stunden']].map(([v, l]) => opt(v, l, s ? s.interval_s : t.interval)).join('')}</select></label></div>
-      ${t.fields.map((f) => fieldHtml(f, cfg[f.key])).join('')}
+      ${t.fields.map((f) => fieldHtml(f, cfg[f.key], ctx)).join('')}
+      ${type === 'agent_channel' && !s ? '<p class="muted small">Name und Grenzwerte werden passend zum gewählten Wert vorgeschlagen.</p>' : ''}
       ${type === 'snmp_traffic' ? `<div class="f"><button type="button" class="btn" data-act="load-ifs" data-dev="${s ? s.device_id : deviceId}">📋 Interfaces vom Gerät laden</button><div id="ifList" class="iflist"></div></div>` : ''}
       ${type === 'agent' ? '<p class="muted small">Nach dem Speichern in den Sensor-Details den Agenten herunterladen und auf dem Windows-Server ausführen.</p>' : ''}
       ${['snmp_system', 'snmp_traffic', 'snmp_custom'].includes(type) ? '<p class="muted small">SNMP-Community/Version werden am Gerät hinterlegt (Gerät bearbeiten › Zugangsdaten). pfSense: Dienste › SNMP aktivieren, Module „MibII“, „Host Resources“, „pf“ anhaken, Firewall-Regel für UDP 161 vom Monitor erlauben.</p>' : ''}
@@ -997,6 +1024,27 @@ openclaw mcp probe signalwarte</pre><h3>Claude Code</h3><pre class="code">claude
       await reload();
       if (S.drawerSensor === r.id) openSensor(r.id, true);
     }, { wide: true });
+    if (type === 'agent_channel' && !s) {
+      const fm = $('#modal form');
+      const apply = () => {
+        const ch = fm.cfg_channel.value;
+        const sug = (ctx.channels || []).find((c) => c.channel === ch) || suggestFor(ch);
+        fm.name.value = sug.name;
+        for (const k of ['warn_max', 'err_max', 'warn_min', 'err_min']) fm[k].value = sug.limits && sug.limits[k] !== undefined ? sug.limits[k] : '';
+      };
+      fm.cfg_channel.addEventListener('change', apply);
+      apply();
+    }
+  }
+
+  // Vorschläge, falls das Gerät noch nicht gemeldet hat (gleiche Regeln wie serverseitig channel_defaults)
+  function suggestFor(ch) {
+    const rules = [[/^CPU %$/, 'CPU-Last', { warn_max: 80, err_max: 95 }], [/^RAM %$/, 'Arbeitsspeicher', { warn_max: 85, err_max: 95 }], [/^Swap %$/, 'Swap', { warn_max: 50 }],
+      [/^Frei (.+) %$/, 'Festplatte $1 frei', { warn_min: 15, err_min: 5 }], [/^Sicherheitsupdates$/, 'Sicherheitsupdates', { warn_max: 0 }], [/^Kritische Updates$/, 'Kritische Updates', { warn_max: 0 }],
+      [/^Neustart ausstehend$/, 'Neustart ausstehend', { warn_max: 0 }], [/^Auto-Dienste gestoppt$/, 'Gestoppte Auto-Dienste', { warn_max: 0 }], [/^Dienste fehlgeschlagen$/, 'Fehlgeschlagene Dienste', { warn_max: 0 }],
+      [/^Tage seit letztem Update$/, 'Tage seit letztem Update', { warn_max: 45 }], [/^Defender aktiv$/, 'Defender Echtzeitschutz', { err_min: 1 }], [/^CPU-Temperatur/, 'CPU-Temperatur', { warn_max: 80, err_max: 90 }]];
+    for (const [re, name, limits] of rules) { const m = ch.match(re); if (m) return { name: name.replace('$1', m[1] || ''), limits }; }
+    return { name: ch, limits: {} };
   }
 
   function notifForm(id) {
@@ -1229,6 +1277,23 @@ openclaw mcp probe signalwarte</pre><h3>Claude Code</h3><pre class="code">claude
         case 'close-modal': closeModal(); break;
         case 'close-modal-go': closeModal(); location.hash = a.getAttribute('href'); break;
         case 'scan': scanDialog(); break;
+        case 'ch-add': {
+          a.disabled = true;
+          const r = await api('agent_channels_add', { device_id: +a.dataset.dev, channels: [a.dataset.ch] });
+          toast(r.created.length ? `Sensor „${a.dataset.ch}“ angelegt` : 'Sensor existiert bereits');
+          await reload(); if (S.drawerSensor) openSensor(S.drawerSensor, true);
+          break;
+        }
+        case 'ch-std': {
+          const chs = Object.keys((await api('sensor', undefined, { id: S.drawerSensor })).sensor.channels || {});
+          const pick = chs.filter((c) => /^(CPU %|RAM %|Frei .+ %|Sicherheitsupdates|Kritische Updates|Neustart ausstehend|Dienste fehlgeschlagen)$/.test(c));
+          if (!pick.length) { toast('Keine passenden Werte gefunden', 'err'); break; }
+          if (!confirm(`Diese Werte als eigene Sensoren anlegen?\n\n${pick.join('\n')}\n\n(Vorhandene werden übersprungen.)`)) break;
+          const r = await api('agent_channels_add', { device_id: +a.dataset.dev, channels: pick });
+          toast(`${r.created.length} Sensor(en) angelegt`);
+          await reload(); if (S.drawerSensor) openSensor(S.drawerSensor, true);
+          break;
+        }
         case 'enroll-os': S.enrollOs = a.dataset.os; viewAgents($('#view')); break;
         case 'copy-cmd': { const t = $('#enrollCmd'); navigator.clipboard.writeText(t.value).then(() => toast('Befehl kopiert')).catch(() => { t.select(); document.execCommand('copy'); toast('Befehl kopiert'); }); break; }
         case 'enroll-regen': if (confirm('Registrierungs-Token neu erzeugen? Bisherige Installationsbefehle funktionieren dann nicht mehr.')) { await api('enroll_regenerate', {}); toast('Neues Token erzeugt'); viewAgents($('#view')); } break;
