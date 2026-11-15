@@ -44,6 +44,12 @@ function effective_status(array $s, array $pausedGroups = []): string
 
 const PUSH_TYPES = ['push', 'agent'];
 
+/** Wartezeit, bis ein Push-/Agent-Sensor als „meldet sich nicht“ gilt (Intervall × 1,5 + 60 s Toleranz). */
+function push_grace(int $interval): int
+{
+    return (int) (max(10, $interval) * 1.5) + 60;
+}
+
 const SENSOR_SELECT = 'SELECT s.*, d.host, d.name AS device_name, d.paused AS device_paused, d.group_id, d.depends_on, d.creds
     FROM sensors s JOIN devices d ON d.id = s.device_id';
 
@@ -74,9 +80,9 @@ function sensor_store_result(array $s, array $r, bool $fromLimits = true): void
         $r = apply_limits($r, $s);
     }
     $fail = (int) $s['fail_count'];
-    $next = $now + max(10, (int) $s['interval_s']);
-    $bad = in_array($r['status'], ['warning', 'down'], true);
     $isPush = in_array($s['type'], PUSH_TYPES, true);   // Push/Agent melden bewusst – keine Wiederholung möglich
+    $next = $now + ($isPush ? push_grace((int) $s['interval_s']) : max(10, (int) $s['interval_s']));
+    $bad = in_array($r['status'], ['warning', 'down'], true);
 
     if ($bad) {
         $fail++;
@@ -136,6 +142,12 @@ function sensor_run(array $s): array
         }
     }
     if (in_array($s['type'], PUSH_TYPES, true)) {
+        // nur dann Fehler, wenn wirklich länger als Intervall + Toleranz nichts kam (z. B. nach Speichern/Fortsetzen nicht sofort)
+        $last = (int) ($s['last_check'] ?: $s['status_since'] ?: 0);
+        if ($last && time() - $last < push_grace((int) $s['interval_s'])) {
+            db()->prepare('UPDATE sensors SET next_check = ? WHERE id = ?')->execute([$last + push_grace((int) $s['interval_s']), $s['id']]);
+            return ['status' => $s['status'], 'message' => 'wartet auf Meldung'];
+        }
         $r = r_fail(($s['type'] === 'agent' ? 'Agent meldet sich nicht – letzte Meldung ' : 'Keine Push-Daten seit ') . ($s['last_check'] ? date('d.m. H:i:s', (int) $s['last_check']) : 'Anlage'));
         sensor_store_result($s, $r, false);
         return $r;
