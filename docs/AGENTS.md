@@ -78,7 +78,7 @@ bash signalwarte-agent.sh collect "nginx,ssh"                # nur sammeln und a
 
 | Kanal | Windows | Linux | Bewertung in Signalwarte |
 |---|---|---|---|
-| CPU % | ✔ | ✔ | Grenzwert (Standard: Warnung > 90 %) |
+| CPU % (Linux: Mittel seit der letzten Meldung) | ✔ | ✔ | Grenzwert (Standard: Warnung > 90 %) |
 | Load 1m/5m/15m, CPU-Kerne | – | ✔ | – |
 | RAM %, RAM frei/gesamt GB, Swap % | ✔ | ✔ | – |
 | Frei `<Laufwerk>` % / GB | ✔ (C:, D: …) | ✔ (/, /var …) | Warnung < 15 %, Fehler < 5 % (im Sensor einstellbar) |
@@ -156,6 +156,7 @@ Einstellung `agent_ignore_failed`.
 | Windows: Skript startet nicht | PowerShell als Administrator, `-ExecutionPolicy Bypass`; Log `C:\ProgramData\SignalwarteAgent\agent.log` |
 | Linux: „Senden fehlgeschlagen … error: 400“ | Agent älter als 1.1.1 auf einem System mit deutschem Gebietsschema (Zahlen mit Komma → ungültiges JSON). Signalwarte repariert solche Meldungen inzwischen selbst, der Agent aktualisiert sich dann automatisch; sonst Agent neu installieren |
 | Updates neu prüfen, ohne zu warten | Am Sensor **Jetzt prüfen** klicken: Der Agent zählt bei seiner nächsten Meldung (spätestens nach dem Intervall) Updates bzw. Windows-Updates und Hotfixes ohne Zwischenspeicher neu und meldet sofort. Direkt auf dem Server: Linux `sudo /opt/signalwarte-agent/signalwarte-agent.sh refresh` |
+| Linux-Container (LXC/Docker): „CPU %“ springt zwischen 0 und 100 %, obwohl z. B. Proxmox 20 % zeigt | Ab 1.1.4 misst der Agent im Container die CPU-Zeit der eigenen cgroup statt `/proc/stat` (dort liefert lxcfs teils stehende Zähler) und meldet das Mittel seit der letzten Meldung. Ältere Agenten aktualisieren sich selbst |
 | Linux: „Updates/Sicherheitsupdates“ bleibt nach `apt upgrade` gelb | Ab 1.1.2 zählt der Agent neu, sobald sich die Paketdatenbank ändert (vorher bis zu 1 h Zwischenspeicher). Ältere Agenten aktualisieren sich selbst |
 | Gerät hat mehrere IP-Adressen | Der Agent meldet bei der Anmeldung alle IPs. Signalwarte nimmt das Gerät mit einer dieser IPs (bevorzugt das mit vorhandenem System-Agent-Sensor), sonst den Hostnamen |
 | Installation mit Registrierungs-Link nutzt alte Konfiguration | Ab 1.1.1 meldet sich der Agent bei jedem Installationslauf mit Registrierungs-Token neu an |
