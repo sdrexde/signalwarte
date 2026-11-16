@@ -17,7 +17,7 @@ set -u
 # Zahlen immer mit Punkt ausgeben: unter de_DE schreibt awk sonst "0,5" -> ungültiges JSON (HTTP 400)
 export LC_ALL=C LANG=C
 
-AGENT_VERSION="1.1.3"
+AGENT_VERSION="1.1.4"
 INSTALL_DIR="/opt/signalwarte-agent"
 INSTALLED="$INSTALL_DIR/signalwarte-agent.sh"
 CONF="/etc/signalwarte-agent.conf"
@@ -78,7 +78,87 @@ http_post() {   # $1 = JSON
 }
 
 # ----------------------------------------------------------------------------- Messwerte
-cpu_sample() { awk '/^cpu /{idle=$5+$6; t=0; for(i=2;i<=NF;i++) t+=$i; print t, idle}' /proc/stat; }
+# CPU-Last. In Containern (LXC, Docker) ist /proc/stat unzuverlässig: lxcfs liefert dort teils stehende
+# Leerlaufzähler, die Auslastung springt dann zwischen 0 und 100 %. Deshalb im Container die verbrauchte
+# CPU-Zeit der eigenen cgroup verwenden – dieselbe Quelle, aus der auch Proxmox die Auslastung berechnet.
+in_container() {
+    if command -v systemd-detect-virt >/dev/null 2>&1; then systemd-detect-virt -c -q 2>/dev/null; return; fi
+    [ -f /.dockerenv ] || [ -f /run/.containerenv ] || grep -qa '^container=' /proc/1/environ 2>/dev/null
+}
+
+cpu_cgroup_usec() {   # verbrauchte CPU-Zeit in µs (cgroup v2, sonst v1); Fehler = nicht verfügbar
+    local f v
+    v=$(awk '$1=="usage_usec"{print $2; exit}' /sys/fs/cgroup/cpu.stat 2>/dev/null)
+    [[ $v =~ ^[0-9]+$ ]] && { echo "$v"; return 0; }
+    for f in /sys/fs/cgroup/cpuacct/cpuacct.usage /sys/fs/cgroup/cpu,cpuacct/cpuacct.usage; do
+        v=$(cat "$f" 2>/dev/null)
+        [[ $v =~ ^[0-9]+$ ]] && { echo $((v / 1000)); return 0; }
+    done
+    return 1
+}
+
+cpu_count() {   # nutzbare CPUs: Kerne laut nproc, begrenzt durch ein CPU-Limit (cgroup-Quota)
+    local n q="" p=""
+    n=$(nproc 2>/dev/null || echo 1)
+    if [ -r /sys/fs/cgroup/cpu.max ]; then
+        read -r q p </sys/fs/cgroup/cpu.max 2>/dev/null
+    elif [ -r /sys/fs/cgroup/cpu/cpu.cfs_quota_us ]; then
+        q=$(cat /sys/fs/cgroup/cpu/cpu.cfs_quota_us 2>/dev/null); p=$(cat /sys/fs/cgroup/cpu/cpu.cfs_period_us 2>/dev/null)
+    fi
+    if [[ $q =~ ^[0-9]+$ ]] && [[ $p =~ ^[0-9]+$ ]] && [ "$q" -gt 0 ] && [ "$p" -gt 0 ]; then
+        awk -v n="$n" -v q="$q" -v p="$p" 'BEGIN { l=q/p; printf "%.2f", (l<n ? l : n) }'
+    else
+        echo "$n"
+    fi
+}
+
+now_ms() {
+    local t; t=$(date +%s%3N 2>/dev/null)
+    [[ $t =~ ^[0-9]+$ ]] && echo "$t" || echo "$(date +%s)000"
+}
+
+# Messpunkt: "cg <ms> <µs CPU-Zeit> <CPUs>" (Container) oder "ps <ms> <Jiffies gesamt> <Jiffies Leerlauf>"
+cpu_sample() {
+    local u
+    if in_container && u=$(cpu_cgroup_usec); then
+        echo "cg $(now_ms) $u $(cpu_count)"
+    else
+        # guest/guest_nice (Spalten 10, 11) stecken schon in user/nice – nicht doppelt zählen
+        awk -v t="$(now_ms)" '/^cpu /{idle=$5+$6; s=0; for(i=2;i<=NF&&i<=9;i++) s+=$i; printf "ps %s %.0f %.0f\n", t, s, idle}' /proc/stat
+    fi
+}
+
+cpu_pct() {   # $1 = älterer, $2 = neuerer Messpunkt -> Auslastung in % (leer, wenn nicht vergleichbar)
+    awk -v a="$1" -v b="$2" 'BEGIN {
+        if (split(a, x, " ") != 4 || split(b, y, " ") != 4 || x[1] != y[1]) exit
+        if (x[1] == "cg") {
+            dt = y[2] - x[2]; du = y[3] - x[3]
+            if (dt <= 0 || du < 0 || y[4] <= 0) exit
+            p = du / (dt * 10 * y[4])          # µs CPU-Zeit / (ms Wanduhr * 1000 * CPUs) * 100
+        } else {
+            dt = y[3] - x[3]; di = y[4] - x[4]
+            if (dt <= 0 || di < 0) exit
+            p = 100 * (1 - di / dt)
+        }
+        if (p < 0) p = 0
+        if (p > 100) p = 100
+        printf "%.1f", p
+    }'
+}
+
+# Auslastung als Mittel seit der letzten Meldung (wie die Graphen von Proxmox & Co.); ohne brauchbaren
+# früheren Messpunkt (erster Lauf, Neustart, zu alt) der Wert über die letzte Sekunde.
+cpu_usage() {   # $1 = Messpunkt vor 1 s, $2 = aktueller Messpunkt
+    local prev="" cpu="" age
+    prev=$(cat "$STATE_DIR/cpu" 2>/dev/null)
+    if [ -n "$prev" ]; then
+        age=$(awk -v a="$prev" -v b="$2" 'BEGIN { split(a,x," "); split(b,y," "); printf "%.0f", (y[2]-x[2])/1000 }')
+        [[ $age =~ ^[0-9]+$ ]] && [ "$age" -ge 10 ] && [ "$age" -le 900 ] && cpu=$(cpu_pct "$prev" "$2")
+    fi
+    [ -z "$cpu" ] && cpu=$(cpu_pct "$1" "$2")
+    [ -d "$STATE_DIR" ] && [ -w "$STATE_DIR" ] && echo "$2" >"$STATE_DIR/cpu" 2>/dev/null
+    echo "${cpu:-0}"
+}
 
 net_sample() {  # Summe rx/tx aller "echten" Interfaces
     awk -F'[: ]+' 'NR>2 { gsub(/^ +/,""); n=$1; if (n=="lo" || n ~ /^(veth|docker|br-|virbr|tap|fwbr|fwpr|fwln|vnet|cali|flannel|cni)/) next; rx+=$2; tx+=$10 } END { printf "%d %d\n", rx, tx }' /proc/net/dev
@@ -111,7 +191,7 @@ collect() {
     sleep 1
     c2=$(cpu_sample); n2=$(net_sample)
     local cpu
-    cpu=$(awk -v a="$c1" -v b="$c2" 'BEGIN { split(a,x," "); split(b,y," "); dt=y[1]-x[1]; di=y[2]-x[2]; if (dt>0) printf "%.1f", 100*(1-di/dt); else print 0 }')
+    cpu=$(cpu_usage "$c1" "$c2")
     ch+=("$(js 'CPU %'):$cpu")
     read -r l1 l5 l15 _ </proc/loadavg
     ch+=("$(js 'Load 1m'):$l1" "$(js 'Load 5m'):$l5" "$(js 'Load 15m'):$l15")
