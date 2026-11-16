@@ -503,6 +503,11 @@
           <td>${t.last_used ? dt(t.last_used) : '–'}</td><td class="right"><button class="btn sm danger" data-act="token-del" data-id="${t.id}">Widerrufen</button></td></tr>`).join('')}</tbody></table>` : '<p class="empty">Noch keine Schlüssel.</p>'}</div>
         <div class="card"><h2>🤖 MCP-Server</h2>
           <p>Adresse (Streamable HTTP): <code>${esc(url)}</code> · Header <code>Authorization: Bearer sw_…</code></p>
+          <div class="row" style="gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
+            <label class="muted" for="mcpurl">Adresse für die Agenten (inkl. Port):</label>
+            <input id="mcpurl" style="min-width:340px" value="${esc(j.mcp_url_fixed)}" placeholder="${esc(j.mcp_url_detected)}">
+            <button class="btn sm" data-act="mcpurl-save">Speichern</button>
+            <span class="muted sub">leer = automatisch (${esc(j.mcp_url_detected)})</span></div>
           <div class="cols2"><div><h3>Tom (Hermes) – <code>~/.hermes/config.yaml</code></h3><pre class="code">mcp_servers:
   signalwarte:
     url: "${esc(url)}"
@@ -1306,6 +1311,11 @@ openclaw mcp probe signalwarte</pre><h3>Claude Code</h3><pre class="code">claude
             <h3>🪟 Windows (Administrator-PowerShell)</h3><textarea readonly rows="3" class="cmdbox" onclick="this.select()">${esc(w)}</textarea>
             <h3>🐧 Linux (root)</h3><textarea readonly rows="2" class="cmdbox" onclick="this.select()">${esc(l)}</textarea>
             <div class="mfoot"><button type="button" class="btn primary" data-act="close-modal">Schließen</button></div></div>`, null, { wide: true });
+          break;
+        }
+        case 'mcpurl-save': {
+          await api('mcp_url_save', { url: document.getElementById('mcpurl').value.trim() });
+          toast('MCP-Adresse gespeichert'); route();
           break;
         }
         case 'token-new': {

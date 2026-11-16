@@ -728,7 +728,20 @@ try {
                 json_err('Nur für Administratoren', 403);
             }
             json_out(['ok' => true, 'tokens' => $db->query('SELECT id, name, prefix, role, created_at, created_by, last_used FROM api_tokens ORDER BY created_at DESC')->fetchAll(),
-                'roles' => API_ROLES, 'mcp_url' => public_base_url() . 'mcp.php']);
+                'roles' => API_ROLES, 'mcp_url' => mcp_url(), 'mcp_url_detected' => public_base_url() . 'mcp.php',
+                'mcp_url_fixed' => (string) setting('mcp_public_url', '')]);
+
+        case 'mcp_url_save':
+            if (!is_admin()) {
+                json_err('Nur für Administratoren', 403);
+            }
+            $u = trim(in_str($in, 'url', 300));
+            if ($u !== '' && !preg_match('#^https?://[A-Za-z0-9.\-\[\]:]+(:\d+)?(/[^\s]*)?$#', $u)) {
+                json_err('Ungültige Adresse – Beispiel: http://192.168.18.110:8080/mcp.php');
+            }
+            setting_set('mcp_public_url', $u);
+            log_event('user', "MCP-Adresse " . ($u !== '' ? "fest auf {$u} gesetzt" : 'auf automatisch gesetzt') . " von {$user['username']}");
+            json_out(['ok' => true]);
 
         case 'api_token_create':
             $plain = api_token_create(require_name(in_str($in, 'name', 80)), (string) ($in['role'] ?? 'read'), $user['username']);

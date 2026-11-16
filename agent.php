@@ -31,9 +31,10 @@ if ($enroll === '') {
         exit('Unbekanntes Token');
     }
 }
-$https = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') || (($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https');
-$host = $_SERVER['HTTP_X_FORWARDED_HOST'] ?? $_SERVER['HTTP_HOST'] ?? 'localhost';
-if (!preg_match('/^[A-Za-z0-9.\-]+(:\d+)?$/', $host)) {   // kommt in Skripte – nur saubere Hostnamen
+require_once __DIR__ . '/lib/apitokens.php';
+$https = request_is_https();
+$host = request_host($https);   // inkl. Port, z. B. 192.168.18.110:8080
+if ($host === null) {   // kommt in Skripte – nur saubere Hostnamen
     http_response_code(400);
     exit('Ungültiger Host');
 }

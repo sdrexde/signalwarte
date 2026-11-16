@@ -53,12 +53,43 @@ function api_token_verify(string $plain): ?array
 }
 
 /** Öffentliche Basis-URL der App (für Links in Agent-/MCP-Antworten). */
+/**
+ * Host der Anfrage inkl. Port. Viele Webserver/Proxys liefern den Host ohne Port (nginx: $host),
+ * dann wird er ergänzt: X-Forwarded-Port vom Proxy, sonst – ohne Proxy – der Port, auf dem der Webserver lauscht.
+ * Standard-Ports (80 bei http, 443 bei https) werden weggelassen. Gibt null bei ungültigem Host zurück.
+ */
+function request_host(bool $https): ?string
+{
+    $fwdHost = trim(explode(',', (string) ($_SERVER['HTTP_X_FORWARDED_HOST'] ?? ''))[0]);
+    $host = $fwdHost !== '' ? $fwdHost : (string) ($_SERVER['HTTP_HOST'] ?? 'localhost');
+    if (!preg_match('/^([A-Za-z0-9.\-]+|\[[0-9A-Fa-f:.]+\])(:\d+)?$/', $host)) {
+        return null;
+    }
+    if (!preg_match('/:\d+$/', $host)) {
+        $fwdPort = trim(explode(',', (string) ($_SERVER['HTTP_X_FORWARDED_PORT'] ?? ''))[0]);
+        $behindProxy = $fwdHost !== '' || !empty($_SERVER['HTTP_X_FORWARDED_PROTO']) || !empty($_SERVER['HTTP_X_FORWARDED_FOR']);
+        $port = ctype_digit($fwdPort) ? (int) $fwdPort : ($behindProxy ? 0 : (int) ($_SERVER['SERVER_PORT'] ?? 0));
+        if ($port > 0 && $port !== ($https ? 443 : 80)) {
+            $host .= ':' . $port;
+        }
+    }
+    return $host;
+}
+
+function request_is_https(): bool
+{
+    return (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') || (($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https');
+}
+
 function public_base_url(): string
 {
-    $https = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') || (($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https');
-    $host = $_SERVER['HTTP_X_FORWARDED_HOST'] ?? $_SERVER['HTTP_HOST'] ?? 'localhost';
-    if (!preg_match('/^[A-Za-z0-9.\-]+(:\d+)?$/', $host)) {
-        $host = 'localhost';
-    }
-    return ($https ? 'https' : 'http') . '://' . $host . base_path();
+    $https = request_is_https();
+    return ($https ? 'https' : 'http') . '://' . (request_host($https) ?? 'localhost') . base_path();
+}
+
+/** Adresse des MCP-Servers: fest eingestellt (Admin-Einstellung) oder aus der aktuellen Anfrage ermittelt. */
+function mcp_url(): string
+{
+    $fixed = trim((string) setting('mcp_public_url', ''));
+    return $fixed !== '' ? $fixed : public_base_url() . 'mcp.php';
 }
