@@ -8,6 +8,7 @@
 #   sudo bash signalwarte-agent.sh test       Werte einmal sammeln, anzeigen und senden
 #   signalwarte-agent.sh run                  Schleife (vom Dienst gestartet)
 #   signalwarte-agent.sh once                 Einmal sammeln und senden (Cron-Betrieb)
+#   sudo bash signalwarte-agent.sh refresh    Sofort neu prüfen (auch Updates, ohne Zwischenspeicher) und senden
 #   sudo bash signalwarte-agent.sh fix-units  In LXC/Containern unnötige, fehlgeschlagene Kernel-Mounts maskieren
 #
 # Voraussetzungen: bash, curl (oder wget), coreutils, procps. Beim Download von Signalwarte werden
@@ -16,7 +17,7 @@ set -u
 # Zahlen immer mit Punkt ausgeben: unter de_DE schreibt awk sonst "0,5" -> ungültiges JSON (HTTP 400)
 export LC_ALL=C LANG=C
 
-AGENT_VERSION="1.1.2"
+AGENT_VERSION="1.1.3"
 INSTALL_DIR="/opt/signalwarte-agent"
 INSTALLED="$INSTALL_DIR/signalwarte-agent.sh"
 CONF="/etc/signalwarte-agent.conf"
@@ -211,7 +212,7 @@ collect() {
     virt=$(systemd-detect-virt 2>/dev/null || echo unbekannt)
     vendor=$(cat /sys/class/dmi/id/sys_vendor 2>/dev/null); model=$(cat /sys/class/dmi/id/product_name 2>/dev/null)
     serial=$(cat /sys/class/dmi/id/product_serial 2>/dev/null); bios=$(cat /sys/class/dmi/id/bios_version 2>/dev/null)
-    [ -z "$model" ] && model=$(tr -d '\0' </proc/device-tree/model 2>/dev/null)
+    [ -z "$model" ] && [ -r /proc/device-tree/model ] && model=$(tr -d '\0' </proc/device-tree/model 2>/dev/null)
     local skip='^(lo|docker|br-|veth|virbr|tap|fwbr|fwpr|fwln|vnet|cali|flannel|cni)'
     ips=$(ip -4 -o addr show scope global 2>/dev/null | awk '{print $2"="$4}' | grep -Ev "$skip" | head -8 | paste -sd ' ')
     macs=$(ip -o link 2>/dev/null | awk '{n=$2; sub(/@.*/,"",n); sub(/:$/,"",n); for (i=1;i<NF;i++) if ($i=="link/ether") print n"="$(i+1)}' | grep -Ev "$skip" | head -8 | paste -sd ' ')
@@ -242,6 +243,13 @@ send_once() {
         [ -n "$iv" ] && echo "$iv" >"$STATE_DIR/interval"
         date '+%Y-%m-%d %H:%M:%S' >"$STATE_DIR/last_ok"; echo "${st:-?}" >"$STATE_DIR/last_status"
         RESP_STATUS=$st
+        # Neuprüfung aus der Oberfläche ("Jetzt prüfen"): Update-Zwischenspeicher verwerfen und sofort neu melden
+        if printf '%s' "$resp" | grep -qE '"recheck": *true' && [ "${1:-}" != "noretry" ]; then
+            log "INFO Neuprüfung angefordert – zähle Updates neu"
+            rm -f "$STATE_DIR/updates"
+            send_once noretry
+            return 0
+        fi
         local uver uurl
         uver=$(printf '%s' "$resp" | grep -o '"update":{[^}]*}' | grep -o '"version":"[^"]*"' | cut -d'"' -f4)
         uurl=$(printf '%s' "$resp" | grep -o '"update":{[^}]*}' | grep -o '"url":"[^"]*"' | cut -d'"' -f4 | sed 's#\\/#/#g')
@@ -413,6 +421,7 @@ case "${1:-install}" in
     run) run_loop ;;
     once) send_once ;;
     collect) WATCH="${2:-}"; collect ;;
+    refresh) need_root; rm -f "$STATE_DIR/updates"; do_test ;;   # alles sofort neu prüfen (ohne Zwischenspeicher) und senden
     fix-units) need_root; load_conf 2>/dev/null || true; fix_container_units verbose ;;   # nur sammeln (Diagnose), nichts senden
-    *) sed -n '2,14p' "$0"; exit 1 ;;
+    *) sed -n '2,15p' "$0"; exit 1 ;;
 esac

@@ -1401,7 +1401,8 @@ openclaw mcp probe signalwarte</pre><h3>Claude Code</h3><pre class="code">claude
         case 'check': {
           a.disabled = true;
           const r = await api('sensor_check', { id });
-          toast(`${ST()[r.result.status] || r.result.status}: ${r.result.message}`, r.result.status === 'down' ? 'err' : 'ok');
+          if (r.recheck) toast(r.recheck, 'ok');
+          else toast(`${ST()[r.result.status] || r.result.status}: ${r.result.message}`, r.result.status === 'down' ? 'err' : 'ok');
           await reload(); if (S.drawerSensor === id) openSensor(id, true);
           break;
         }

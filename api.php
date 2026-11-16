@@ -348,8 +348,19 @@ try {
 
         case 'sensor_check':
             $s = sensor_row((int) $in['id']) ?? json_err('Sensor nicht gefunden', 404);
+            $recheck = null;
+            if (in_array($s['type'], ['agent', 'agent_channel'], true)) {
+                // Agent kann man nicht aktiv abfragen: Auftrag hinterlegen, der Agent zählt bei seiner nächsten
+                // Meldung Updates/Hotfixes neu (ohne Zwischenspeicher) und meldet sofort erneut
+                $aid = $s['type'] === 'agent' ? (int) $s['id'] : (int) $db->query("SELECT id FROM sensors WHERE device_id = " . (int) $s['device_id'] . " AND type = 'agent' ORDER BY id LIMIT 1")->fetchColumn();
+                if ($aid) {
+                    setting_set('agent_recheck_' . $aid, (string) time());
+                    $a = sensor_row($aid);
+                    $recheck = 'Neuprüfung angefordert – der Agent prüft bei seiner nächsten Meldung (spätestens in ' . (int) ($a['interval_s'] ?? 120) . ' s) alles neu, auch Updates.';
+                }
+            }
             $r = sensor_run($s);
-            json_out(['ok' => true, 'result' => $r]);
+            json_out(['ok' => true, 'result' => $r, 'recheck' => $recheck]);
 
         case 'sensor_ack':
             $msg = in_str($in, 'message', 300) ?: 'bestätigt';

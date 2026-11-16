@@ -31,7 +31,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$AgentVersion = '1.3.1'
+$AgentVersion = '1.3.2'
 $TaskName = 'SignalwarteAgent'
 $InstallDir = Join-Path $env:ProgramData 'SignalwarteAgent'
 $InstalledScript = Join-Path $InstallDir 'SignalwarteAgent.ps1'
@@ -318,6 +318,14 @@ function Start-AgentLoop {
             if ($resp.update -and $resp.update.version -and ([version]$resp.update.version -gt [version]$AgentVersion)) {
                 if (Update-Agent $resp.update.version $resp.update.url) { $mutex.ReleaseMutex(); return }
             }
+            # Neupruefung aus der Oberflaeche ("Jetzt pruefen"): Update-/Hotfix-Zwischenspeicher verwerfen, sofort neu melden
+            if ($resp.recheck -and -not $state['recheck_done']) {
+                Write-Log 'Neupruefung angefordert - suche Updates neu'
+                $state['wu_at'] = $null; $state['hotfix_at'] = $null; $state['recheck_done'] = $true
+                Save-State $state
+                Start-Sleep -Seconds 2; continue
+            }
+            $state['recheck_done'] = $false
             # Neue Dienstliste sofort einmal nachliefern
             $newWatch = @($state['services'])
             if (($newWatch -join ',') -ne ($watch -join ',') -and $newWatch.Count) { Start-Sleep -Seconds 3; continue }

@@ -144,6 +144,10 @@ if ($s['type'] === 'agent') {
     // Selbst-Update: neuere Agent-Version verfügbar?
     require_once __DIR__ . '/lib/agents.php';
     $resp = ['ok' => true, 'status' => $status, 'services' => $watch, 'interval' => (int) $s['interval_s']];
+    if ((string) setting('agent_recheck_' . $s['id'], '') !== '') {
+        $resp['recheck'] = true;
+        setting_set('agent_recheck_' . $s['id'], '');
+    }
     $plat = ($json['info']['platform'] ?? '') === 'linux' ? 'linux' : 'windows';
     $have = (string) ($json['info']['agent'] ?? '');
     $latest = agent_latest_version($plat);
