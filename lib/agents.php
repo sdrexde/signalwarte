@@ -66,15 +66,32 @@ function agent_enroll(array $in): array
     if ($hostname === '' && $ip === '') {
         throw new InvalidArgumentException('hostname oder ip fehlt');
     }
-    // vorhandenes Gerät: gleiche IP, sonst gleicher Name/Host
-    $dev = null;
-    foreach ([[$ip, 'host'], [$hostname, 'name'], [$hostname, 'host']] as [$v, $col]) {
-        if ($v === '' || $dev) {
+    // alle gemeldeten IPs (Geräte mit mehreren Netzen); Haupt-IP zuerst
+    $ips = $ip !== '' ? [$ip] : [];
+    foreach ((array) ($in['ips'] ?? []) as $x) {
+        $x = (string) $x;
+        if (filter_var($x, FILTER_VALIDATE_IP) && !in_array($x, $ips, true) && count($ips) < 16) {
+            $ips[] = $x;
+        }
+    }
+    // vorhandenes Gerät: eine der IPs, sonst gleicher Name/Host. Bei mehreren Treffern gewinnt das Gerät,
+    // das schon einen System-Agent-Sensor hat (z. B. vorher von Hand angelegt).
+    $cands = [];
+    foreach (array_merge(array_map(fn($v) => [$v, 'host'], $ips), [[$hostname, 'name'], [$hostname, 'host']]) as [$v, $col]) {
+        if ($v === '') {
             continue;
         }
-        $st = $db->prepare("SELECT id, name FROM devices WHERE lower({$col}) = lower(?) ORDER BY id LIMIT 1");
+        $st = $db->prepare("SELECT id, name FROM devices WHERE lower({$col}) = lower(?) ORDER BY id");
         $st->execute([$v]);
-        $dev = $st->fetch() ?: null;
+        foreach ($st->fetchAll() as $r) {
+            $cands[(int) $r['id']] ??= $r;
+        }
+    }
+    $dev = null;
+    if ($cands) {
+        $ids = implode(',', array_keys($cands));
+        $withAgent = $db->query("SELECT device_id FROM sensors WHERE type = 'agent' AND device_id IN ({$ids}) ORDER BY id LIMIT 1")->fetchColumn();
+        $dev = $withAgent ? $cands[(int) $withAgent] : reset($cands);
     }
     $created = false;
     if (!$dev) {
@@ -100,6 +117,6 @@ function agent_enroll(array $in): array
         $sid = create_sensor((int) $dev['id'], 'agent', 'System-Agent', ['services' => (string) setting('enroll_services_' . $platform, '')]);
         $s = sensor_row($sid);
     }
-    log_event('user', ($created ? 'Neues Gerät per Agent angemeldet: ' : 'Agent angemeldet an vorhandenem Gerät: ') . "{$dev['name']} ({$ip}, {$platform})", null, (int) $dev['id']);
+    log_event('user', ($created ? 'Neues Gerät per Agent angemeldet: ' : 'Agent angemeldet an vorhandenem Gerät: ') . "{$dev['name']} (" . implode(', ', $ips ?: [$hostname]) . ", {$platform})", null, (int) $dev['id']);
     return ['device_id' => (int) $dev['id'], 'sensor_id' => (int) $s['id'], 'url' => public_base_url() . 'push.php?token=' . $s['push_token'], 'created' => $created];
 }

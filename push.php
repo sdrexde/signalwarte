@@ -25,6 +25,12 @@ $json = null;
 if (str_contains($_SERVER['CONTENT_TYPE'] ?? '', 'json')) {
     $raw = file_get_contents('php://input', false, null, 0, 256 * 1024);
     $json = json_decode($raw ?: '', true);
+    if (!is_array($json) && is_string($raw)) {
+        // ältere Linux-Agenten unter deutschem Gebietsschema schicken "0,5" statt 0.5 – reparieren,
+        // damit sie wieder melden und sich selbst aktualisieren können
+        $fixed = preg_replace('/(":\s*-?\d+),(\d+)(?=\s*[,}\]])/', '$1.$2', $raw);
+        $json = json_decode((string) $fixed, true);
+    }
     if (!is_array($json)) {
         json_err('Ungültiges JSON');
     }
@@ -61,6 +67,19 @@ if ($s['type'] === 'agent') {
     }
     if (($channels['Neustart ausstehend'] ?? 0) > 0) {
         $bump('warning', 'Neustart ausstehend');
+    }
+    // fehlgeschlagene systemd-Units: Ausnahmen (Sensor-Einstellung + globale Liste) herausrechnen
+    if (isset($channels['Dienste fehlgeschlagen']) && is_array($json['failed'] ?? null)) {
+        $ignf = array_filter(array_map('trim', explode(',', (string) ($cfg['ignore_failed'] ?? '') . ',' . (string) setting('agent_ignore_failed', ''))));
+        $json['failed'] = array_values(array_filter((array) $json['failed'], function ($n) use ($ignf) {
+            foreach ($ignf as $p) {
+                if (fnmatch($p, (string) $n, FNM_CASEFOLD)) {
+                    return false;
+                }
+            }
+            return true;
+        }));
+        $channels['Dienste fehlgeschlagen'] = count($json['failed']);
     }
     if (($channels['Dienste fehlgeschlagen'] ?? 0) > 0) {
         $bump('warning', $channels['Dienste fehlgeschlagen'] . ' systemd-Dienst(e) fehlgeschlagen' . (!empty($json['failed']) ? ' (' . mb_substr(implode(', ', (array) $json['failed']), 0, 150) . ')' : ''));

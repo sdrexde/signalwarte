@@ -125,6 +125,7 @@ function sensor_types(): array
             'fields' => [
                 ['key' => 'primary', 'label' => 'Hauptwert (wird in Kachel und Graph angezeigt)', 'type' => 'channel', 'default' => 'CPU %'],
                 ['key' => 'services', 'label' => 'Zu überwachende Dienste (Komma-getrennt; Windows z. B. DNS,NTDS · Linux z. B. nginx,docker,ssh)', 'type' => 'text', 'default' => ''],
+                ['key' => 'ignore_failed', 'label' => 'Fehlgeschlagene systemd-Units ignorieren (Linux, Komma-getrennt, * erlaubt, z. B. qwenduline-sync.service)', 'type' => 'text', 'default' => ''],
                 ['key' => 'ignore_stopped', 'label' => 'Gestoppte Auto-Dienste ignorieren (Komma-getrennt, * erlaubt, z. B. Avira*,edgeupdate)', 'type' => 'text', 'default' => ''],
                 ['key' => 'disk_warn', 'label' => 'Laufwerk frei Warnung unter %', 'type' => 'number', 'default' => 15],
                 ['key' => 'disk_err', 'label' => 'Laufwerk frei Fehler unter %', 'type' => 'number', 'default' => 5],

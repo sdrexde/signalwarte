@@ -119,6 +119,25 @@ CPU-Temperatur > 80/90 °C. Meldet der Agent nicht mehr, gehen auch die Einzelse
 
 Auch der **Hauptwert** des System-Agent-Sensors (was Kachel und Graph zeigen) wird jetzt aus dieser Liste gewählt.
 
+## Linux: fehlgeschlagene Units in Containern
+
+In LXC- und Docker-Containern schlagen einige Kernel-Mounts systembedingt fehl, z. B. `sys-kernel-config.mount`, und
+lösen dann die Warnung „systemd-Dienst(e) fehlgeschlagen“ aus. Ab Version 1.1.1 erkennt der Agent einen Container
+(`systemd-detect-virt -c`) und maskiert nur diese fest hinterlegten Units, wenn sie im Zustand *failed* sind. Danach setzt er
+ihren Fehlerstatus zurück. Das entspricht `systemctl mask …` und `systemctl reset-failed …`:
+
+`sys-kernel-config.mount`, `sys-kernel-debug.mount`, `sys-kernel-tracing.mount`, `sys-fs-fuse-connections.mount`,
+`dev-hugepages.mount`, `dev-mqueue.mount`, `systemd-journald-audit.socket`
+
+- Von Hand auslösen: `sudo /opt/signalwarte-agent/signalwarte-agent.sh fix-units`
+- Abschalten: `FIX_CONTAINER_UNITS=0` in `/etc/signalwarte-agent.conf` eintragen
+- Rückgängig machen: `systemctl unmask <unit>`
+- Auf echter Hardware und in VMs ändert der Agent nichts.
+
+Andere fehlgeschlagene Units, die bewusst ignoriert werden sollen (z. B. `qwenduline-sync.service`), trägst du am Sensor unter
+**Fehlgeschlagene systemd-Units ignorieren** ein (Komma-getrennt, `*` erlaubt). Eine globale Liste gibt es über die
+Einstellung `agent_ignore_failed`.
+
 ## Funktionsweise
 
 - Der Agent sendet alle *Intervall* Sekunden (Sensor-Einstellung, Standard 120 s) ein JSON an `push.php?token=…`.
@@ -135,4 +154,8 @@ Auch der **Hauptwert** des System-Agent-Sensors (was Kachel und Graph zeigen) wi
 | Download-Link ist `http://` statt `https://` | Reverse-Proxy setzt `X-Forwarded-Proto: https` nicht (siehe INSTALLATION.md, Abschnitt 7) |
 | Dienst „keine Daten“ | kommt mit der nächsten Meldung (der Agent erfährt die Dienstliste aus der Antwort) |
 | Windows: Skript startet nicht | PowerShell als Administrator, `-ExecutionPolicy Bypass`; Log `C:\ProgramData\SignalwarteAgent\agent.log` |
+| Linux: „Senden fehlgeschlagen … error: 400“ | Agent älter als 1.1.1 auf einem System mit deutschem Gebietsschema (Zahlen mit Komma → ungültiges JSON). Signalwarte repariert solche Meldungen inzwischen selbst, der Agent aktualisiert sich dann automatisch; sonst Agent neu installieren |
+| Gerät hat mehrere IP-Adressen | Der Agent meldet bei der Anmeldung alle IPs. Signalwarte nimmt das Gerät mit einer dieser IPs (bevorzugt das mit vorhandenem System-Agent-Sensor), sonst den Hostnamen |
+| Installation mit Registrierungs-Link nutzt alte Konfiguration | Ab 1.1.1 meldet sich der Agent bei jedem Installationslauf mit Registrierungs-Token neu an |
+| Linux/LXC: „systemd-Dienst(e) fehlgeschlagen (sys-kernel-config.mount)“ | Im Container nicht nutzbare Kernel-Mounts maskiert der Agent selbst (siehe unten). Andere Units: Sensor-Einstellung „Fehlgeschlagene systemd-Units ignorieren“ |
 | Linux: „Weder systemd noch Cron“ | `apt install cron` bzw. `dnf install cronie`, dann erneut installieren |

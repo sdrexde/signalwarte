@@ -8,12 +8,15 @@
 #   sudo bash signalwarte-agent.sh test       Werte einmal sammeln, anzeigen und senden
 #   signalwarte-agent.sh run                  Schleife (vom Dienst gestartet)
 #   signalwarte-agent.sh once                 Einmal sammeln und senden (Cron-Betrieb)
+#   sudo bash signalwarte-agent.sh fix-units  In LXC/Containern unnötige, fehlgeschlagene Kernel-Mounts maskieren
 #
 # Voraussetzungen: bash, curl (oder wget), coreutils, procps. Beim Download von Signalwarte werden
 # Server-Adresse und Token eingesetzt. Konfiguration nach der Installation: /etc/signalwarte-agent.conf
 set -u
+# Zahlen immer mit Punkt ausgeben: unter de_DE schreibt awk sonst "0,5" -> ungültiges JSON (HTTP 400)
+export LC_ALL=C LANG=C
 
-AGENT_VERSION="1.1.0"
+AGENT_VERSION="1.1.1"
 INSTALL_DIR="/opt/signalwarte-agent"
 INSTALLED="$INSTALL_DIR/signalwarte-agent.sh"
 CONF="/etc/signalwarte-agent.conf"
@@ -80,6 +83,26 @@ net_sample() {  # Summe rx/tx aller "echten" Interfaces
     awk -F'[: ]+' 'NR>2 { gsub(/^ +/,""); n=$1; if (n=="lo" || n ~ /^(veth|docker|br-|virbr|tap|fwbr|fwpr|fwln|vnet|cali|flannel|cni)/) next; rx+=$2; tx+=$10 } END { printf "%d %d\n", rx, tx }' /proc/net/dev
 }
 
+# In LXC-/Docker-Containern scheitern einige Kernel-Mounts systembedingt (z. B. sys-kernel-config.mount).
+# Sie sind dort nutzlos: maskieren + Fehlerstatus zurücksetzen. Nur diese feste Liste, nur im Container,
+# nur wenn sie wirklich "failed" sind. Abschalten: FIX_CONTAINER_UNITS=0 in /etc/signalwarte-agent.conf
+CONTAINER_UNITS="sys-kernel-config.mount sys-kernel-debug.mount sys-kernel-tracing.mount sys-fs-fuse-connections.mount dev-hugepages.mount dev-mqueue.mount systemd-journald-audit.socket"
+fix_container_units() {   # $1 = "verbose" für Ausgabe auf der Konsole
+    [ "${FIX_CONTAINER_UNITS:-1}" = 0 ] && return 0
+    [ "$(id -u)" -eq 0 ] || return 0
+    command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ] || return 0
+    systemd-detect-virt -c -q 2>/dev/null || { [ "${1:-}" = verbose ] && echo "Kein Container erkannt – nichts zu tun."; return 0; }
+    local u n=0
+    for u in $CONTAINER_UNITS; do
+        if systemctl is-failed --quiet "$u" 2>/dev/null; then
+            systemctl mask "$u" >/dev/null 2>&1 && systemctl reset-failed "$u" >/dev/null 2>&1 && {
+                log "INFO Container: $u maskiert (im Container nicht nutzbar)"; n=$((n + 1)); }
+        fi
+    done
+    [ "${1:-}" = verbose ] && echo "$n Unit(s) maskiert."
+    return 0
+}
+
 collect() {
     local -a ch=()
     local c1 c2 n1 n2
@@ -133,6 +156,7 @@ collect() {
     # systemd: fehlgeschlagene Units + überwachte Dienste
     local failed_json="[]" services_json="{}"
     if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
+        fix_container_units
         local failed
         failed=$(systemctl --failed --no-legend --plain 2>/dev/null | awk '{print $1}' | grep -v '^$' | head -20)
         ch+=("$(js 'Dienste fehlgeschlagen'):$(printf '%s' "$failed" | grep -c . || true)")
@@ -244,11 +268,19 @@ primary_ip() {
     ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i=1;i<NF;i++) if ($i=="src") {print $(i+1); exit}}'
 }
 
+# alle IPv4-Adressen (ohne Docker/Bridges), als JSON-Liste – Geräte mit mehreren Netzen werden so wiedergefunden
+all_ips_json() {
+    local list
+    list=$(ip -4 -o addr show scope global 2>/dev/null | awk '{split($4,a,"/"); print $2" "a[1]}' \
+        | grep -Ev '^(lo|docker|br-|veth|virbr|tap|fwbr|fwpr|fwln|vnet|cali|flannel|cni)' | awk '{print $2}' | head -16)
+    printf '[%s]' "$(printf '%s\n' "$list" | grep . | while read -r a; do printf '%s,' "$(js "$a")"; done | sed 's/,$//')"
+}
+
 # Selbstanmeldung mit Registrierungs-Token → liefert die Push-URL des (ggf. neu angelegten) Geräts
 enroll() {
     local osn body resp url
     osn=$( (. /etc/os-release 2>/dev/null; echo "${PRETTY_NAME:-Linux}") )
-    body="{\"key\":$(js "$EMBEDDED_ENROLL_KEY"),\"hostname\":$(js "$(hostname)"),\"ip\":$(js "$(primary_ip)"),\"platform\":\"linux\",\"os\":$(js "$osn")}"
+    body="{\"key\":$(js "$EMBEDDED_ENROLL_KEY"),\"hostname\":$(js "$(hostname)"),\"ip\":$(js "$(primary_ip)"),\"ips\":$(all_ips_json),\"platform\":\"linux\",\"os\":$(js "$osn")}"
     URL="$EMBEDDED_ENROLL_URL"
     resp=$(http_post "$body" 2>&1) || { echo "Anmeldung fehlgeschlagen: $resp" >&2; return 1; }
     url=$(printf '%s' "$resp" | grep -o '"url":"[^"]*"' | cut -d'"' -f4 | sed 's#\\/#/#g')
@@ -280,7 +312,8 @@ do_install() {
     if [[ $EMBEDDED_URL != __SIGNALWARTE* ]] && [ -n "$EMBEDDED_URL" ]; then url="$EMBEDDED_URL"; else url="${URL:-}"; fi
     command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1 || {
         echo "curl wird installiert …"; (apt-get install -y curl || dnf install -y curl || apk add curl) >/dev/null 2>&1; }
-    if [ -z "$url" ] && [[ $EMBEDDED_ENROLL_KEY != __SIGNALWARTE* ]] && [ -n "$EMBEDDED_ENROLL_KEY" ]; then
+    # Skript mit Registrierungs-Token: immer neu anmelden – auch wenn noch eine alte Konfiguration existiert
+    if [[ $EMBEDDED_ENROLL_KEY != __SIGNALWARTE* ]] && [ -n "$EMBEDDED_ENROLL_KEY" ]; then
         echo "Melde diesen Server bei Signalwarte an …"
         enroll || exit 1
         url="$URL"
@@ -373,6 +406,7 @@ case "${1:-install}" in
     test) do_test ;;
     run) run_loop ;;
     once) send_once ;;
-    collect) WATCH="${2:-}"; collect ;;   # nur sammeln (Diagnose), nichts senden
-    *) sed -n '2,13p' "$0"; exit 1 ;;
+    collect) WATCH="${2:-}"; collect ;;
+    fix-units) need_root; load_conf 2>/dev/null || true; fix_container_units verbose ;;   # nur sammeln (Diagnose), nichts senden
+    *) sed -n '2,14p' "$0"; exit 1 ;;
 esac
