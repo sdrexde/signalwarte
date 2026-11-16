@@ -155,6 +155,7 @@ Einstellung `agent_ignore_failed`.
 | Dienst „keine Daten“ | kommt mit der nächsten Meldung (der Agent erfährt die Dienstliste aus der Antwort) |
 | Windows: Skript startet nicht | PowerShell als Administrator, `-ExecutionPolicy Bypass`; Log `C:\ProgramData\SignalwarteAgent\agent.log` |
 | Linux: „Senden fehlgeschlagen … error: 400“ | Agent älter als 1.1.1 auf einem System mit deutschem Gebietsschema (Zahlen mit Komma → ungültiges JSON). Signalwarte repariert solche Meldungen inzwischen selbst, der Agent aktualisiert sich dann automatisch; sonst Agent neu installieren |
+| Linux: „Updates/Sicherheitsupdates“ bleibt nach `apt upgrade` gelb | Ab 1.1.2 zählt der Agent neu, sobald sich die Paketdatenbank ändert (vorher bis zu 1 h Zwischenspeicher). Ältere Agenten aktualisieren sich selbst |
 | Gerät hat mehrere IP-Adressen | Der Agent meldet bei der Anmeldung alle IPs. Signalwarte nimmt das Gerät mit einer dieser IPs (bevorzugt das mit vorhandenem System-Agent-Sensor), sonst den Hostnamen |
 | Installation mit Registrierungs-Link nutzt alte Konfiguration | Ab 1.1.1 meldet sich der Agent bei jedem Installationslauf mit Registrierungs-Token neu an |
 | Linux/LXC: „systemd-Dienst(e) fehlgeschlagen (sys-kernel-config.mount)“ | Im Container nicht nutzbare Kernel-Mounts maskiert der Agent selbst (siehe unten). Andere Units: Sensor-Einstellung „Fehlgeschlagene systemd-Units ignorieren“ |

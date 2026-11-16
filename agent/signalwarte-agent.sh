@@ -16,7 +16,7 @@ set -u
 # Zahlen immer mit Punkt ausgeben: unter de_DE schreibt awk sonst "0,5" -> ungültiges JSON (HTTP 400)
 export LC_ALL=C LANG=C
 
-AGENT_VERSION="1.1.1"
+AGENT_VERSION="1.1.2"
 INSTALL_DIR="/opt/signalwarte-agent"
 INSTALLED="$INSTALL_DIR/signalwarte-agent.sh"
 CONF="/etc/signalwarte-agent.conf"
@@ -177,8 +177,14 @@ collect() {
     ch+=("$(js 'Neustart ausstehend'):$rb")
 
     # Updates (höchstens stündlich, ohne Paketlisten zu aktualisieren)
-    local uf="$STATE_DIR/updates" now; now=$(date +%s)
-    if [ ! -f "$uf" ] || [ $((now - $(stat -c %Y "$uf" 2>/dev/null || echo 0))) -gt 3600 ]; then
+    # Zwischenspeicher neu berechnen: stündlich ODER sobald sich die Paketdatenbank geändert hat
+    # (nach apt upgrade / dnf update / apk upgrade bzw. apt update) – sonst bleibt die Warnung bis zu 1 h stehen
+    local uf="$STATE_DIR/updates" now uage pkgm=0 p m; now=$(date +%s)
+    uage=$(stat -c %Y "$uf" 2>/dev/null || echo 0)
+    for p in /var/lib/dpkg/status /var/lib/apt/lists /var/lib/rpm /var/lib/dnf /lib/apk/db/installed; do
+        m=$(stat -c %Y "$p" 2>/dev/null || echo 0); [ "$m" -gt "$pkgm" ] && pkgm=$m
+    done
+    if [ ! -f "$uf" ] || [ $((now - uage)) -gt 3600 ] || [ "$pkgm" -gt "$uage" ]; then
         local up=-1 sec=-1
         if command -v apt-get >/dev/null 2>&1; then
             local sim; sim=$(LANG=C apt-get -s -o Debug::NoLocking=true upgrade 2>/dev/null | grep '^Inst ')
